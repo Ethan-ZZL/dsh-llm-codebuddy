@@ -31,6 +31,7 @@ import type {
   LlmResolvedModelInfo,
   Message,
   PreparedAdapterCall,
+  ResolvedRetryPolicy,
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import {
@@ -58,6 +59,8 @@ export interface CodeBuddyConnectionOptions {
   defaultMaxTokens: number
   /** Maximum provider idle time while one stream read is outstanding. */
   streamIdleTimeoutMs: number
+  /** Retry policy captured with the route registration. */
+  retryPolicy?: ResolvedRetryPolicy
 }
 
 /** Constructor options: the session plus the per-operation connection thunk. */
@@ -201,6 +204,10 @@ export class CodeBuddyAdapter extends LlmAdapter {
 
   override providerInfo(provider: string): LlmProviderInfo {
     return { id: provider, name: CODEBUDDY_DISPLAY_NAME }
+  }
+
+  override providerRetryPolicy(_provider: string): ResolvedRetryPolicy | undefined {
+    return this.config.options().retryPolicy
   }
 
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {

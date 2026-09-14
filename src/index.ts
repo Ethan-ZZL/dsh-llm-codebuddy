@@ -12,6 +12,8 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
+import type { ResolvedRetryPolicy, RetryPolicyConfig } from '@deepseek-ai/dsh-llm'
 import { CodeBuddyAdapter } from './adapter.js'
 import type { CodeBuddyConnectionOptions } from './adapter.js'
 import { CodeBuddyAuthService } from './auth-service.js'
@@ -76,6 +78,8 @@ export interface Config {
   defaultMaxTokens?: number
   /** Maximum provider idle time while one stream read is outstanding. */
   streamIdleTimeoutMs?: number
+  /** Provider-owned retry policy; omission selects the harness defaults. */
+  retryPolicy?: RetryPolicyConfig
 }
 
 /**
@@ -113,6 +117,7 @@ export function resolveConnectionOptions(config: Config = {}): CodeBuddyConnecti
     ),
     defaultMaxTokens: positiveInteger(config.defaultMaxTokens, 'defaultMaxTokens', DEFAULT_MAX_TOKENS),
     streamIdleTimeoutMs,
+    retryPolicy: resolveRetryPolicy(config.retryPolicy, 'dsh-llm-codebuddy: retryPolicy'),
   }
 }
 
