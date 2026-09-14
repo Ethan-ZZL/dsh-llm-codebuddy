@@ -14,6 +14,7 @@ import type { ReactElement } from 'react'
 import { createElement as h, Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { IconChevronDownOutline14, IconChevronRightOutline14, IconCheckOutline16, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SnapshotStore } from './client-types.js'
+import { CODEBUDDY_PROVIDER } from './constants.js'
 
 /**
  * Translate function over the official `model` locale namespace, registered
@@ -162,6 +163,10 @@ function descriptionOf(enriched: EnrichedModel | undefined, zh: boolean): string
  * same breath — without it, an already-open menu would gain a new row with no
  * enrichment (bare name plus the credit-multiplier description) until the user
  * closed and reopened it.
+ *
+ * Entries are keyed `provider/model`, the same composite the official seat
+ * identifies rows by: another provider may list the same model id, and the
+ * prefixed key keeps its rows from matching CodeBuddy's enrichment.
  */
 function useEnrichedCatalog(rpc: EnrichedCatalogRpc, open: boolean, catalogKey: string): Map<string, EnrichedModel> {
   const [entries, setEntries] = useState<Map<string, EnrichedModel>>(() => new Map())
@@ -171,7 +176,7 @@ function useEnrichedCatalog(rpc: EnrichedCatalogRpc, open: boolean, catalogKey: 
     void rpc.models().then((models) => {
       if (stopped || models === undefined) return
       const map = new Map<string, EnrichedModel>()
-      for (const model of models) map.set(model.id, model)
+      for (const model of models) map.set(`${CODEBUDDY_PROVIDER}/${model.id}`, model)
       setEntries(map)
     }).catch(() => { /* enrichment is advisory; rows render bare on failure */ })
     return () => { stopped = true }
@@ -445,7 +450,8 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
             h('div', { className: 'cbms-groupTitle', id: `${id}-${group.id}` }, group.name),
             group.models.map((model) => {
               const selected = state.current?.provider === group.id && state.current.model === model.id
-              const extra = enriched.get(model.id)
+              // Keyed `provider/model`, so other providers' rows never match.
+              const extra = enriched.get(`${group.id}/${model.id}`)
               const rate = rowRate(creditsOf(extra), extra?.promotion)
               const badges = (extra?.tags ?? []).map(parseTag).filter((tag): tag is DisplayTag => tag !== undefined)
               const promotion = extra?.promotion
