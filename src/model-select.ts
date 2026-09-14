@@ -39,10 +39,10 @@ export interface EnrichedModel {
   /** English description, when CodeBuddy disclosed one. */
   descriptionEn?: string
   /**
-   * The currently active campaign on this model, when one runs: a colored
+   * The currently active promotion on this model, when one runs: a colored
    * badge pill for the row plus locale hover text for the tooltip.
    */
-  promotion?: { color: string, label: string, textZh?: string, textEn?: string }
+  promotion?: { color: string, label: string, textZh?: string, textEn?: string, discountedRate?: string }
 }
 
 /** The enriched catalog the seat resolves before first render of a group. */
@@ -106,6 +106,35 @@ function creditsOf(enriched: EnrichedModel | undefined): string | undefined {
 }
 
 /**
+ * The rate label a row shows at its trailing edge. An active promotion's
+ * override replaces the catalog rate; it is tinted with the promotion's badge
+ * color only when it differs numerically.
+ */
+function rowRate(credits: string | undefined, promotion: EnrichedModel['promotion']): { label: string, promo: boolean, free: boolean, tint?: string } | undefined {
+  const promoLabel = promotion?.discountedRate
+  const label = promoLabel ?? credits
+  if (label === undefined) return undefined
+  const promoRate = promoLabel !== undefined ? parseRate(promoLabel) : undefined
+  const catalogRate = credits !== undefined ? parseRate(credits) : undefined
+  const differs = promoRate !== undefined && (catalogRate === undefined || promoRate !== catalogRate)
+  return {
+    label,
+    promo: promoLabel !== undefined,
+    free: isFreeCredits(label),
+    ...differs && promotion.color !== undefined ? { tint: promotion.color } : {},
+  }
+}
+
+/** Numeric value of a rate label ("x0.50" → 0.5), or undefined. */
+function parseRate(label: string): number | undefined {
+  const match = /(\d+(?:\.\d+)?)/.exec(label)
+  const digits = match?.[1]
+  if (digits === undefined) return undefined
+  const value = Number.parseFloat(digits)
+  return Number.isFinite(value) ? value : undefined
+}
+
+/**
  * Whether a credit label reads as a zero rate ("x0.00").
  */
 function isFreeCredits(credits: string | undefined): boolean {
@@ -161,8 +190,8 @@ const tooltip = (props: { side: 'top' | 'right' | 'bottom', delayMs: number, lab
 
 /**
  * The hover bubble content for one model row: name + id on the first line
- * (id dimmer, after the name), the badge tags and campaign badge on the
- * second, the locale description, and the campaign hover text below a
+ * (id dimmer, after the name), the badge tags and promotion badge on the
+ * second, the locale description, and the promotion hover text below a
  * separator.
  */
 function modelTooltipContent(model: { id: string, name: string, description?: string }, enriched: EnrichedModel | undefined, zh: boolean): ReactElement {
@@ -171,7 +200,7 @@ function modelTooltipContent(model: { id: string, name: string, description?: st
   // CodeBuddy's own locale descriptions first, then the harness catalog
   // description — every row, any provider, gets a tooltip description.
   const description = descriptionOf(enriched, zh) ?? model.description
-  // Campaign hover text follows the same locale order as descriptions.
+  // Promotion hover text follows the same locale order as descriptions.
   const promotionText = promotion === undefined ? undefined
     : zh ? promotion.textZh ?? promotion.textEn : promotion.textEn ?? promotion.textZh
   return h('div', { className: 'cbms-tip' },
@@ -417,7 +446,7 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
             group.models.map((model) => {
               const selected = state.current?.provider === group.id && state.current.model === model.id
               const extra = enriched.get(model.id)
-              const credits = creditsOf(extra)
+              const rate = rowRate(creditsOf(extra), extra?.promotion)
               const badges = (extra?.tags ?? []).map(parseTag).filter((tag): tag is DisplayTag => tag !== undefined)
               const promotion = extra?.promotion
               return tooltip({ label: modelTooltipContent(model, extra, zh), side: 'top', delayMs: 300 },
@@ -437,18 +466,19 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
                       key: badge.label, className: 'cbms-tag',
                       style: { color: badge.color, borderColor: badge.color },
                     }, badge.label)),
-                    // The campaign badge rides after the catalog badges.
+                    // The promotion badge rides after the catalog badges.
                     promotion !== undefined ? h('span', {
                       key: 'promotion', className: 'cbms-tag',
                       style: { color: promotion.color, borderColor: promotion.color },
                     }, promotion.label) : null,
                   ),
-                  // The selection check comes before the credits, so an
+                  // The selection check comes before the rate, so an
                   // unselected row's multiplier sits flush right.
                   h('span', { className: 'cbms-check' }, selected ? h(IconCheckOutline16, null) : null),
-                  credits !== undefined ? h('span', {
-                    className: `cbms-credits${isFreeCredits(credits) ? ' cbms-creditsFree' : ''}`,
-                  }, credits) : null,
+                  rate !== undefined ? h('span', {
+                    className: `cbms-credits${rate.promo ? ' cbms-creditsPromo' : rate.free ? ' cbms-creditsFree' : ''}`,
+                    ...rate.tint === undefined ? {} : { style: { color: rate.tint } },
+                  }, rate.label) : null,
                 ),
               )
             }),
@@ -512,6 +542,7 @@ export const MODEL_SELECT_CSS = `
 .cbms-tag{flex:none;border:0.5px solid;border-radius:4px;padding:0 5px;font-size:11px;line-height:16px;font-weight:400}
 .cbms-credits{color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;white-space:nowrap;flex:none;font-size:12px;line-height:18px;font-weight:400}
 .cbms-creditsFree{color:var(--dsw-alias-state-success-primary)}
+.cbms-creditsPromo{color:var(--dsw-alias-state-business-primary)}
 .cbms-check{color:var(--dsw-alias-label-primary);flex:0 0 18px;place-items:center;display:grid}
 .cbms-cell{box-sizing:border-box;width:auto;min-width:100%;height:40px;color:var(--dsw-alias-label-primary);cursor:pointer;text-align:left;background:0 0;border:none;border-radius:10px;align-items:center;gap:8px;padding:0 10px;font-size:14px;line-height:22px;display:flex}
 .cbms-cell:hover{background:var(--dsw-alias-interactive-bg-hover)}

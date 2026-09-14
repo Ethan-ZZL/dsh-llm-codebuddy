@@ -68,7 +68,7 @@ export interface SessionLogger {
   error: (message: unknown) => void
 }
 
-/** One cached catalog read: the entries, the campaigns, and when they were read. */
+/** One cached catalog read: the entries, the promotions, and when they were read. */
 interface CatalogSnapshot {
   models: readonly CodeBuddyModel[]
   promotions: readonly CodeBuddyModelPromotion[]
@@ -400,10 +400,10 @@ export class CodeBuddySession {
   }
 
   /**
-   * The catalog plus its scheduled campaigns, both cached together under the
+   * The catalog plus its scheduled promotions, both cached together under the
    * same TTL and single-flight as the model list.
    * @param signal - optional cancellation for the underlying read.
-   * @returns the models and the campaigns in service order.
+   * @returns the models and the promotions in service order.
    */
   async catalogData(signal?: AbortSignal): Promise<{ models: readonly CodeBuddyModel[], promotions: readonly CodeBuddyModelPromotion[] }> {
     return this.catalogDataWith(signal, false)
@@ -425,7 +425,7 @@ export class CodeBuddySession {
    * `llm/adapters-updated` and makes the client drop its cached groups.
    * @param signal - optional cancellation for the underlying read.
    * @param force - whether to bypass the cache TTL (subject to the floor).
-   * @returns the models and the campaigns in service order.
+   * @returns the models and the promotions in service order.
    */
   private async catalogDataWith(signal: AbortSignal | undefined, force: boolean): Promise<{ models: readonly CodeBuddyModel[], promotions: readonly CodeBuddyModelPromotion[] }> {
     const cached = this.catalog
@@ -499,10 +499,10 @@ export class CodeBuddySession {
   }
 
   /**
-   * The catalog and campaigns, or empty lists when they cannot be read — the
+   * The catalog and promotions, or empty lists when they cannot be read — the
    * advisory-read twin of {@link modelsOrEmpty}.
    * @param signal - optional cancellation.
-   * @returns the models and campaigns, or empty lists.
+   * @returns the models and promotions, or empty lists.
    */
   async catalogDataOrEmpty(signal?: AbortSignal): Promise<{ models: readonly CodeBuddyModel[], promotions: readonly CodeBuddyModelPromotion[] }> {
     return this.catalogDataOrEmptyWith(signal, false, false)
@@ -519,7 +519,7 @@ export class CodeBuddySession {
    * credit multiplier down to a bare name. Only a signed-out session, or one
    * that has never read successfully, yields empty lists.
    * @param signal - optional cancellation.
-   * @returns the current models and campaigns, the last good copy, or empty lists.
+   * @returns the current models and promotions, the last good copy, or empty lists.
    */
   async refreshCatalog(signal?: AbortSignal): Promise<{ models: readonly CodeBuddyModel[], promotions: readonly CodeBuddyModelPromotion[] }> {
     return this.catalogDataOrEmptyWith(signal, true, true)

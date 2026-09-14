@@ -110,20 +110,31 @@ export interface CodeBuddyModel {
 
 export interface CodeBuddyConfig {
   models: CodeBuddyModel[]
-  /** Scheduled campaigns that attach a badge and hover text to models. */
+  /** Scheduled promotions that attach a badge and hover text to models. */
   modelPromotions?: CodeBuddyModelPromotion[]
 }
 
 /**
- * One scheduled campaign from the CodeBuddy config: a colored badge plus hover
+ * The price override one promotion may carry: while it runs, the
+ * model's rate is shown from here instead of the catalog's own `credits`.
+ */
+export interface CodeBuddyPromotionDiscount {
+  /** Pre-formatted discounted rate, same grammar as `credits` ("x0.5", "0x"). */
+  discountedCredits?: string
+  /** Numeric rate multiplier, used when `discountedCredits` is unparseable. */
+  factor?: number
+}
+
+/**
+ * One scheduled promotion from the CodeBuddy config: a colored badge plus hover
  * text attached to every model in {@link modelIds} while its schedule is
  * active.
  */
 export interface CodeBuddyModelPromotion {
   id: string
-  /** Whether the campaign is currently switched on service-side. */
+  /** Whether the promotion is currently switched on service-side. */
   enabled?: boolean
-  /** Higher wins when several campaigns are active on one model. */
+  /** Higher wins when several promotions are active on one model. */
   priority?: number
   modelIds?: string[]
   badge?: {
@@ -140,12 +151,14 @@ export interface CodeBuddyModelPromotion {
     textZh?: string
     textEn?: string
   }
+  /** Price override while the promotion runs, when it carries one. */
+  discount?: CodeBuddyPromotionDiscount
   schedule?: {
     /** IANA timezone the daily windows are evaluated in. */
     timezone?: string
-    /** ISO-8601 instant the campaign starts at. */
+    /** ISO-8601 instant the promotion starts at. */
     validFrom?: string
-    /** ISO-8601 instant the campaign ends at. */
+    /** ISO-8601 instant the promotion ends at. */
     validUntil?: string
     /** "HH:mm" windows, inclusive start and exclusive end. */
     daily?: { start: string, end: string }[]
@@ -219,14 +232,14 @@ function nowMinutesIn(timezone: string | undefined): number {
 }
 
 /**
- * Whether one campaign's schedule currently covers the moment, mirroring the
- * CodeBuddy IDE's own evaluation: a disabled campaign never runs; a missing
- * schedule always does; `validFrom`/`validUntil` bound the whole campaign by
+ * Whether one promotion's schedule currently covers the moment, mirroring the
+ * CodeBuddy IDE's own evaluation: a disabled promotion never runs; a missing
+ * schedule always does; `validFrom`/`validUntil` bound the whole promotion by
  * absolute instant, and `daily` windows are `[start, end)` ranges in the
  * schedule's timezone (a malformed window edge drops that window).
- * @param promotion - one campaign entry.
+ * @param promotion - one promotion entry.
  * @param now - the instant to test against (defaults to the current time).
- * @returns true when the campaign is active.
+ * @returns true when the promotion is active.
  */
 export function isPromotionActive(promotion: CodeBuddyModelPromotion, now: number = Date.now()): boolean {
   if (promotion.enabled === false) return false

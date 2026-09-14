@@ -855,7 +855,7 @@ interface ModelsReply {
     tags?: string[]
     descriptionZh?: string
     descriptionEn?: string
-    promotion?: { color: string, label: string, textZh?: string, textEn?: string }
+    promotion?: { color: string, label: string, textZh?: string, textEn?: string, discountedRate?: string }
   }[]
 }
 

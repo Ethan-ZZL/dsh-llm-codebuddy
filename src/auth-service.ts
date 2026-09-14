@@ -24,7 +24,7 @@ import type { CodeBuddySession } from './session.js'
 import { clearStorage, loadStorage, saveStorage } from './storage.js'
 import type { CodeBuddyStorage } from './storage.js'
 import { hasDisclosedCapacity, isPromotionActive } from './types.js'
-import type { CodeBuddyModel, CodeBuddyModelPromotion } from './types.js'
+import type { CodeBuddyModel, CodeBuddyModelPromotion, CodeBuddyPromotionDiscount } from './types.js'
 import type { UsageSnapshot, UsageWindow } from './usage.js'
 
 /** The RPC channel the client calls the auth service on. */
@@ -110,16 +110,16 @@ export interface CodeBuddyModelEntry {
   /** English description, when disclosed. */
   descriptionEn?: string
   /**
-   * The currently active campaign on this model, when one runs: a colored
+   * The currently active promotion on this model, when one runs: a colored
    * badge for the row plus locale hover text for the tooltip.
    */
   promotion?: CodeBuddyPromotionView
 }
 
 /**
- * The client-facing shape of one active model campaign: only the display
- * facts (badge color/label, locale hover texts); scheduling and priority are
- * resolved host-side.
+ * The client-facing shape of one active model promotion: only the display
+ * facts (badge color/label, locale hover texts, discounted rate); scheduling
+ * and priority are resolved host-side.
  */
 export interface CodeBuddyPromotionView {
   /** Hex color the badge pill renders in. */
@@ -129,6 +129,8 @@ export interface CodeBuddyPromotionView {
   textZh?: string
   /** English hover text, when disclosed. */
   textEn?: string
+  /** Discounted rate replacing the model's `credits`. */
+  discountedRate?: string
 }
 
 /** The shape `models` returns to the client. */
@@ -193,15 +195,15 @@ function projectModel(model: CodeBuddyModel, promotion: CodeBuddyPromotionView |
 }
 
 /**
- * The active campaign for one model, when one runs.
+ * The active promotion for one model, when one runs.
  *
- * Among the campaigns whose `modelIds` cover the model and whose schedule is
+ * Among the promotions whose `modelIds` cover the model and whose schedule is
  * currently active, the highest `priority` wins — the CodeBuddy IDE's own
- * selection rule. Only the display facts (badge color/label, hover texts)
- * cross the wire; scheduling stays host-side.
- * @param promotions - the campaigns from the config read.
+ * selection rule. Only the display facts (badge color/label, hover texts,
+ * discounted rate) cross the wire; scheduling stays host-side.
+ * @param promotions - the promotions from the config read.
  * @param modelId - the model to resolve for.
- * @returns the winning campaign's display facts, or undefined.
+ * @returns the winning promotion's display facts, or undefined.
  */
 function promotionFor(promotions: readonly CodeBuddyModelPromotion[], modelId: string): CodeBuddyPromotionView | undefined {
   let winner: { priority: number, view: CodeBuddyPromotionView } | undefined
@@ -213,9 +215,46 @@ function promotionFor(promotions: readonly CodeBuddyModelPromotion[], modelId: s
     const priority = promotion.priority ?? 0
     if (winner !== undefined && winner.priority >= priority) continue
     const { textZh, textEn } = promotion.hover ?? {}
-    winner = { priority, view: { color, label, ...textZh === undefined ? {} : { textZh }, ...textEn === undefined ? {} : { textEn } } }
+    const discountedRate = discountedRateOf(promotion.discount)
+    winner = {
+      priority,
+      view: {
+        color,
+        label,
+        ...textZh === undefined ? {} : { textZh },
+        ...textEn === undefined ? {} : { textEn },
+        ...discountedRate === undefined ? {} : { discountedRate },
+      },
+    }
   }
   return winner?.view
+}
+
+/**
+ * Normalize a promotion's price override into a display label: the
+ * pre-formatted string wins when it parses, otherwise the numeric factor.
+ * @param discount - the promotion's price override, when it carries one.
+ * @returns the normalized `xN.nn` label, or undefined.
+ */
+function discountedRateOf(discount: CodeBuddyPromotionDiscount | undefined): string | undefined {
+  if (discount === undefined) return undefined
+  const fromLabel = parseRateLabel(discount.discountedCredits)
+  if (fromLabel !== undefined) return fromLabel
+  if (discount.factor !== undefined && Number.isFinite(discount.factor) && discount.factor >= 0) {
+    return `x${discount.factor.toFixed(2)}`
+  }
+  return undefined
+}
+
+/** Parse a rate label ("x0.79", "0.5x", "0") into `xN.nn`, or undefined. */
+function parseRateLabel(label: string | undefined): string | undefined {
+  if (label === undefined) return undefined
+  const match = /(\d+(?:\.\d+)?)/.exec(label)
+  const digits = match?.[1]
+  if (digits === undefined) return undefined
+  const value = Number.parseFloat(digits)
+  if (!Number.isFinite(value)) return undefined
+  return `x${value.toFixed(2)}`
 }
 
 /**
