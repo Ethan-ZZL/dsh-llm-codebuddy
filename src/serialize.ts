@@ -196,6 +196,11 @@ function userContent(parts: readonly WireContentPart[]): string | WireContentPar
  * string content — image blocks nested inside them move to a separate user
  * message emitted right after, the same relocation the official DeepSeek
  * adapter applies.
+ *
+ * The service honors image content only in the final user message: images in
+ * earlier user messages are silently dropped once another user message
+ * follows, so image parts are forwarded into the last user message, where
+ * they ride alongside that message's own content.
  * @param messages - the harness conversation.
  * @param supportsImages - whether the selected model declared image input.
  * @param images - request versions for every image reference, keyed by id.
@@ -206,8 +211,19 @@ export function serializeMessages(
   supportsImages: boolean,
   images: ReadonlyMap<string, RequestImageAttachment> = new Map(),
 ): WireMessage[] {
+  // The service honors image content only in the final user message, so image
+  // parts from earlier messages forward into the last user turn. The last
+  // user message is found first so its own images stay in place.
+  let lastUserIndex = -1
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i]
+    if (message === undefined) continue
+    if (message.role !== 'user' && message.role !== 'assistant') continue
+    if (message.role === 'user' && message.content.every(block => block.type !== 'tool-result')) lastUserIndex = i
+  }
   const wire: WireMessage[] = []
-  for (const message of messages) {
+  const forwarded: WireContentPart[] = []
+  for (const [messageIndex, message] of messages.entries()) {
     assertSupportedContent(message.content, supportsImages)
     if (message.role === 'system') {
       wire.push({ role: 'system', content: flattenText(message.content) })
@@ -221,26 +237,50 @@ export function serializeMessages(
     const userBlocks = message.content.filter(block => block.type !== 'tool-result')
     const userParts = contentParts(userBlocks, images)
     const userText = flattenText(userBlocks)
+    const isLastUser = messageIndex === lastUserIndex
     if (userParts.length > 0) {
-      wire.push({ role: 'user', content: userContent(userParts) })
+      // Image parts leave the message when it is not the final user turn;
+      // they are appended to the final user message below.
+      const keptParts = isLastUser ? userParts : userParts.filter(part => part.type !== 'image_url')
+      forwarded.push(...(isLastUser ? [] : userParts.filter(part => part.type === 'image_url')))
+      if (keptParts.length > 0) {
+        wire.push({ role: 'user', content: userContent(keptParts) })
+      } else if (toolResults.length > 0) {
+        // The message carried only images; keep a placeholder user turn so
+        // later tool results still follow one on the wire.
+        wire.push({ role: 'user', content: userText })
+      } else {
+        wire.push({ role: 'user', content: userContent(userParts) })
+      }
     } else if (userText.length > 0 || toolResults.length === 0) {
       // A text-only user message, or the message head before tool results.
       wire.push({ role: 'user', content: userText })
     }
     for (const result of toolResults) {
       const resultParts = contentParts(result.content, images)
-      const hasImage = resultParts.some(part => part.type === 'image_url')
+      const imagePartsOfResult = resultParts.filter(part => part.type === 'image_url')
       wire.push({
         role: 'tool',
         tool_call_id: result.toolCallId as unknown as string,
         // Empty output still needs some content on the wire.
         content: flattenText(result.content) || '(no output)',
       })
-      if (hasImage) {
-        // Tool messages take string content only; the images ride in the
-        // immediately following user message instead.
-        wire.push({ role: 'user', content: userContent(resultParts) })
+      if (imagePartsOfResult.length > 0) {
+        // Tool messages take string content only; the images are forwarded to
+        // the final user message instead of a message of their own.
+        forwarded.push(...imagePartsOfResult)
       }
+    }
+  }
+  if (forwarded.length > 0) {
+    const lastUser = [...wire].reverse().find(message => message.role === 'user')
+    if (lastUser !== undefined) {
+      const existing = lastUser.content
+      lastUser.content = Array.isArray(existing)
+        ? [...forwarded, ...existing]
+        : [...forwarded, { type: 'text', text: existing }]
+    } else {
+      wire.push({ role: 'user', content: forwarded })
     }
   }
   return wire
