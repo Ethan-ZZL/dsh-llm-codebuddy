@@ -11,7 +11,7 @@
  * @module dsh-llm-codebuddy/serialize
  */
 
-import { contentHasImage, LlmError, requestImageHandleText } from '@deepseek-ai/dsh-llm'
+import { contentHasImage, LlmError, offloadRequestImagesWithPolicy, offloadedImageText, requestImageHandleText } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
 import type {
   ImageAttachmentRef,
@@ -34,6 +34,22 @@ export interface AttachmentReader {
  * per-model pixel or byte budget, so the harness defaults apply.
  */
 const IMAGE_REQUEST_POLICY: ImageRequestPolicy = { maxPixels: 640_000, maxBytes: 1024 * 1024 }
+
+/**
+ * Per-request image limits for the CodeBuddy route. The service publishes no
+ * budget, so these are conservative caps keeping one request from carrying an
+ * unbounded image payload; `serializeRequest` offloads the oldest images to
+ * text placeholders once either is exceeded.
+ */
+export interface ImageRequestLimits {
+  /** Maximum number of images in one request. */
+  maxImages: number
+  /** Maximum total encoded image bytes (base64-expanded) in one request. */
+  maxBytes: number
+}
+
+/** Default image limits: 20 inline images, 20 MiB of base64 payload. */
+export const DEFAULT_IMAGE_REQUEST_LIMITS: ImageRequestLimits = { maxImages: 20, maxBytes: 20 * 1024 * 1024 }
 
 /** Join the text blocks of one message. */
 function flattenText(blocks: readonly ContentBlock[]): string {
@@ -234,24 +250,48 @@ export function serializeMessages(
  * Build the chat-completions request body. Always streaming with usage
  * reporting; absent options are omitted rather than sent as null so the
  * provider's own defaults apply.
+ *
+ * When the request carries more images than {@link ImageRequestLimits} allows,
+ * the oldest occurrences are replaced with text placeholders before
+ * serialization, so an oversized request degrades instead of being rejected
+ * outright.
  * @param options - the assembled harness request.
  * @param supportsImages - whether the selected model declared image input.
  * @param attachments - the durable attachment store, when images may occur.
+ * @param limits - per-request image limits; defaults when omitted.
  * @returns the request body.
  */
 export async function serializeRequest(
   options: GenerateOptions,
   supportsImages: boolean,
   attachments?: AttachmentReader,
+  limits: ImageRequestLimits = DEFAULT_IMAGE_REQUEST_LIMITS,
 ): Promise<WireRequest> {
   const images = supportsImages && attachments !== undefined
     ? await prepareRequestImages(options.messages, attachments, options.signal)
     : new Map<string, RequestImageAttachment>()
+  const requestMessages = images.size > 0
+    ? offloadRequestImagesWithPolicy(options.messages, {
+        // Base64 data URLs are what the wire carries, so the budget counts
+        // the expanded length rather than the raw encoded bytes.
+        representation: 'base64',
+        byteLength: (ref) => {
+          const version = images.get(ref.attachmentId)
+          if (version === undefined) {
+            throw new LlmError(`CodeBuddy request image ${ref.attachmentId} was not prepared.`, 'INVALID_REQUEST')
+          }
+          return version.bytes
+        },
+        maxBytes: limits.maxBytes,
+        maxImages: limits.maxImages,
+        placeholder: ref => offloadedImageText(ref),
+      })
+    : options.messages
   const messages: WireMessage[] = []
   if (options.system !== undefined) {
     messages.push({ role: 'system', content: options.system })
   }
-  messages.push(...serializeMessages(options.messages, supportsImages, images))
+  messages.push(...serializeMessages(requestMessages, supportsImages, images))
 
   const tools: WireTool[] | undefined = options.tools?.map(tool => ({
     type: 'function' as const,
