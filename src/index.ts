@@ -125,7 +125,11 @@ export function apply(ctx: Context, config: Config = {}): void {
   // keeps the adapter reading it per operation.
   const resolved = resolveConnectionOptions(config)
   const session = new CodeBuddySession(ctx.logger)
-  const adapter = new CodeBuddyAdapter({ session, options: () => resolved })
+  const adapter = new CodeBuddyAdapter({
+    session,
+    options: () => resolved,
+    resolveAttachments: () => ctx.get('attachments'),
+  })
 
   ctx.llm.registerAdapter([CODEBUDDY_PROVIDER], adapter)
 

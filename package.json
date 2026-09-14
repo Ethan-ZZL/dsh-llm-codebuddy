@@ -68,6 +68,7 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-attachment": "*",
     "@deepseek-ai/dsh-client-ui-primitives": "*",
     "@deepseek-ai/dsh-home-paths": "*",
     "@deepseek-ai/dsh-llm": ">=0.1.2-rc.1",

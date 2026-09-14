@@ -4,14 +4,36 @@
  * User text is joined, assistant text becomes `content`, tool calls become
  * `tool_calls`, and each tool result becomes its own `role: 'tool'` message —
  * the harness carries tool results inside user messages, which this wire route
- * does not accept.
+ * does not accept. A user message carrying image blocks serializes into
+ * OpenAI content parts with base64 data URLs, read through the durable
+ * attachment service; text-only messages stay on the compact string form.
  *
  * @module dsh-llm-codebuddy/serialize
  */
 
-import { contentHasImage, LlmError } from '@deepseek-ai/dsh-llm'
+import { contentHasImage, LlmError, requestImageHandleText } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
-import type { WireMessage, WireRequest, WireTool } from './types.js'
+import type {
+  ImageAttachmentRef,
+  ImageRequestPolicy,
+  RequestImageAttachment,
+} from '@deepseek-ai/dsh-attachment'
+import type { WireContentPart, WireMessage, WireRequest, WireTool } from './types.js'
+
+/** The attachment-store face image serialization reads bytes through. */
+export interface AttachmentReader {
+  readImageRequest(
+    ref: ImageAttachmentRef,
+    policy: ImageRequestPolicy,
+    signal?: AbortSignal,
+  ): Promise<RequestImageAttachment>
+}
+
+/**
+ * Image request policy for the CodeBuddy route. The catalog discloses no
+ * per-model pixel or byte budget, so the harness defaults apply.
+ */
+const IMAGE_REQUEST_POLICY: ImageRequestPolicy = { maxPixels: 640_000, maxBytes: 1024 * 1024 }
 
 /** Join the text blocks of one message. */
 function flattenText(blocks: readonly ContentBlock[]): string {
@@ -63,15 +85,110 @@ function serializeAssistant(message: Message): WireMessage {
   }
 }
 
+/** Collect image references from a block list, recursing into tool results. */
+function collectImageRefs(blocks: readonly ContentBlock[], refs: Map<string, ImageAttachmentRef>): void {
+  for (const block of blocks) {
+    if (block.type === 'image') refs.set(block.attachment.attachmentId, block.attachment)
+    else if (block.type === 'tool-result') collectImageRefs(block.content, refs)
+  }
+}
+
+/**
+ * Resolve every image reference in the conversation to its request version.
+ * @param messages - the harness conversation.
+ * @param attachments - the durable attachment store.
+ * @param signal - optional cancellation for the reads.
+ * @returns request versions keyed by attachment id; empty when no images.
+ */
+async function prepareRequestImages(
+  messages: readonly Message[],
+  attachments: AttachmentReader,
+  signal?: AbortSignal,
+): Promise<Map<string, RequestImageAttachment>> {
+  const refs = new Map<string, ImageAttachmentRef>()
+  for (const message of messages) collectImageRefs(message.content, refs)
+  if (refs.size === 0) return new Map()
+  const ordered = [...refs.values()]
+  const projected = await Promise.all(ordered.map(ref => attachments.readImageRequest(ref, IMAGE_REQUEST_POLICY, signal)))
+  const versions = new Map<string, RequestImageAttachment>()
+  ordered.forEach((ref, index) => {
+    const version = projected[index]
+    if (version === undefined) {
+      throw new LlmError(`CodeBuddy request image ${ref.attachmentId} could not be read.`, 'INVALID_REQUEST')
+    }
+    versions.set(ref.attachmentId, version)
+  })
+  return versions
+}
+
+/** One image as wire parts: a text handle describing it, then the data URL. */
+function imageParts(
+  attachmentId: string,
+  images: ReadonlyMap<string, RequestImageAttachment>,
+  precededByContent: boolean,
+): WireContentPart[] {
+  const version = images.get(attachmentId)
+  if (version === undefined) {
+    throw new LlmError(`CodeBuddy request image ${attachmentId} was not prepared.`, 'INVALID_REQUEST')
+  }
+  return [
+    {
+      type: 'text',
+      text: `${precededByContent ? '\n' : ''}${requestImageHandleText(version.attachment, version)}`,
+    },
+    {
+      type: 'image_url',
+      image_url: {
+        url: `data:${version.mediaType};base64,${Buffer.from(version.data).toString('base64')}`,
+      },
+    },
+  ]
+}
+
+/** Ordered wire parts for one block list, resolving images through the map. */
+function contentParts(
+  blocks: readonly ContentBlock[],
+  images: ReadonlyMap<string, RequestImageAttachment>,
+): WireContentPart[] {
+  const parts: WireContentPart[] = []
+  for (const block of blocks) {
+    if (block.type === 'text') {
+      if (block.text.length > 0) parts.push({ type: 'text', text: block.text })
+    } else if (block.type === 'image') {
+      parts.push(...imageParts(block.attachment.attachmentId, images, parts.length > 0))
+    } else if (block.type === 'tool-result') {
+      parts.push(...contentParts(block.content, images))
+    }
+  }
+  return parts
+}
+
+/** Compact string form when every part is text, otherwise the parts array. */
+function userContent(parts: readonly WireContentPart[]): string | WireContentPart[] {
+  const text: string[] = []
+  for (const part of parts) {
+    if (part.type !== 'text') return [...parts]
+    text.push(part.text)
+  }
+  return text.join('')
+}
+
 /**
  * Serialize the conversation in order.
+ *
+ * Tool results expand into their own `role: 'tool'` entries, which accept only
+ * string content — image blocks nested inside them move to a separate user
+ * message emitted right after, the same relocation the official DeepSeek
+ * adapter applies.
  * @param messages - the harness conversation.
  * @param supportsImages - whether the selected model declared image input.
- * @returns the wire messages, each tool result expanded into its own entry.
+ * @param images - request versions for every image reference, keyed by id.
+ * @returns the wire messages.
  */
 export function serializeMessages(
   messages: readonly Message[],
   supportsImages: boolean,
+  images: ReadonlyMap<string, RequestImageAttachment> = new Map(),
 ): WireMessage[] {
   const wire: WireMessage[] = []
   for (const message of messages) {
@@ -85,17 +202,29 @@ export function serializeMessages(
       continue
     }
     const toolResults = message.content.filter(block => block.type === 'tool-result')
-    const text = flattenText(message.content)
-    if (text.length > 0 || toolResults.length === 0) {
-      wire.push({ role: 'user', content: text })
+    const userBlocks = message.content.filter(block => block.type !== 'tool-result')
+    const userParts = contentParts(userBlocks, images)
+    const userText = flattenText(userBlocks)
+    if (userParts.length > 0) {
+      wire.push({ role: 'user', content: userContent(userParts) })
+    } else if (userText.length > 0 || toolResults.length === 0) {
+      // A text-only user message, or the message head before tool results.
+      wire.push({ role: 'user', content: userText })
     }
     for (const result of toolResults) {
+      const resultParts = contentParts(result.content, images)
+      const hasImage = resultParts.some(part => part.type === 'image_url')
       wire.push({
         role: 'tool',
         tool_call_id: result.toolCallId as unknown as string,
         // Empty output still needs some content on the wire.
         content: flattenText(result.content) || '(no output)',
       })
+      if (hasImage) {
+        // Tool messages take string content only; the images ride in the
+        // immediately following user message instead.
+        wire.push({ role: 'user', content: userContent(resultParts) })
+      }
     }
   }
   return wire
@@ -107,17 +236,22 @@ export function serializeMessages(
  * provider's own defaults apply.
  * @param options - the assembled harness request.
  * @param supportsImages - whether the selected model declared image input.
+ * @param attachments - the durable attachment store, when images may occur.
  * @returns the request body.
  */
-export function serializeRequest(
+export async function serializeRequest(
   options: GenerateOptions,
   supportsImages: boolean,
-): WireRequest {
+  attachments?: AttachmentReader,
+): Promise<WireRequest> {
+  const images = supportsImages && attachments !== undefined
+    ? await prepareRequestImages(options.messages, attachments, options.signal)
+    : new Map<string, RequestImageAttachment>()
   const messages: WireMessage[] = []
   if (options.system !== undefined) {
     messages.push({ role: 'system', content: options.system })
   }
-  messages.push(...serializeMessages(options.messages, supportsImages))
+  messages.push(...serializeMessages(options.messages, supportsImages, images))
 
   const tools: WireTool[] | undefined = options.tools?.map(tool => ({
     type: 'function' as const,

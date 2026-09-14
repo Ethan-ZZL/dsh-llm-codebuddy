@@ -315,10 +315,16 @@ export interface WireChunk {
   usage?: WireUsage | null
 }
 
+/** One OpenAI-style content part of a multimodal user message. */
+export type WireContentPart =
+  | { type: 'text', text: string }
+  | { type: 'image_url', image_url: { url: string } }
+
 /** One wire message sent to the chat endpoint. */
 export interface WireMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
-  content: string
+  /** Plain text, or content parts when the message carries images. */
+  content: string | WireContentPart[]
   reasoning_content?: string
   tool_call_id?: string
   tool_calls?: {

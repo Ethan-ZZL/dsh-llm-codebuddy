@@ -12,6 +12,7 @@
  */
 
 import {
+  contentHasImage,
   CONTEXT_WINDOW_EXCEEDED_CODE,
   isContextWindowExceededError,
   isQuotaExceededError,
@@ -28,6 +29,7 @@ import type {
   LlmProviderInfo,
   LlmReasoningEffortInfo,
   LlmResolvedModelInfo,
+  Message,
   PreparedAdapterCall,
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
@@ -40,6 +42,7 @@ import {
 import { NotLoggedInError, SessionUnavailableError } from './session.js'
 import type { CodeBuddySession } from './session.js'
 import { parseSse } from './sse.js'
+import type { AttachmentReader } from './serialize.js'
 import { serializeRequest } from './serialize.js'
 import { translate } from './translate.js'
 import { hasDisclosedCapacity } from './types.js'
@@ -61,6 +64,8 @@ export interface CodeBuddyConnectionOptions {
 export interface CodeBuddyAdapterOptions {
   session: CodeBuddySession
   options: () => CodeBuddyConnectionOptions
+  /** Resolves the durable attachment store, when the host provides one. */
+  resolveAttachments?: () => AttachmentReader | undefined
 }
 
 /** Parse a `retry-after` header into milliseconds, when it carries a usable delay. */
@@ -77,6 +82,11 @@ function providerRetryAfterMs(value: string | null): number | undefined {
 function requestId(headers: Headers): ReturnType<typeof ProviderRequestId> | undefined {
   const value = headers.get('x-request-id') ?? headers.get('x-requestid')
   return value === null || value.length === 0 ? undefined : ProviderRequestId(value)
+}
+
+/** Whether any message in the conversation carries image content. */
+function messagesHaveImage(messages: readonly Message[]): boolean {
+  return messages.some(message => contentHasImage(message.content))
 }
 
 /**
@@ -295,7 +305,18 @@ export class CodeBuddyAdapter extends LlmAdapter {
       )
     }
 
-    const body = serializeRequest(options, supportsImages)
+    if (supportsImages && messagesHaveImage(options.messages)) {
+      // Image content is only serializable through the durable attachment
+      // service; a host without it would silently drop the pixels.
+      if (this.config.resolveAttachments?.() === undefined) {
+        throw new LlmError(
+          'CodeBuddy image requests require the durable attachment service.',
+          'UNSUPPORTED_CONTENT',
+        )
+      }
+    }
+
+    const body = await serializeRequest(options, supportsImages, this.config.resolveAttachments?.())
     // Serialized before the try so the transport label below covers only the
     // transport boundary.
     const payload = JSON.stringify(body)
