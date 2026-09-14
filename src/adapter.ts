@@ -331,6 +331,7 @@ export class CodeBuddyAdapter extends LlmAdapter {
           'accept': 'text/event-stream',
           'user-agent': `CLI/${CODEBUDDY_CLI_VERSION} CodeBuddy/${CODEBUDDY_CLI_VERSION}`,
           ...options.sessionId === undefined ? {} : { 'X-Conversation-ID': options.sessionId },
+          'X-Model-ID': options.model,
         },
         body: payload,
         ...options.signal === undefined ? {} : { signal: options.signal },
