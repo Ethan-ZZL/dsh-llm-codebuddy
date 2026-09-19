@@ -104,6 +104,8 @@ export interface CodeBuddyModel {
   supportsImages?: boolean
   supportsToolCall?: boolean
   supportsReasoning?: boolean
+  /** Whether thinking cannot be turned off for this model. */
+  onlyReasoning?: boolean
   /** Selectable thinking levels, when disclosed. */
   reasoning?: CodeBuddyReasoning
 }

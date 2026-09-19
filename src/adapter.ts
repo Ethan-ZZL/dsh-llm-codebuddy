@@ -146,51 +146,52 @@ const EFFORT_NAMES: Readonly<Record<string, string>> = {
 
 /**
  * Translate CodeBuddy's disclosed thinking levels into harness reasoning
- * metadata, or `undefined` when the catalog gives nothing selectable.
+ * metadata, or `undefined` when the model does not reason at all.
  *
  * The levels are passed through as opaque ids rather than mapped onto a fixed
  * scale: they are exactly what the chat endpoint accepts as `reasoning_effort`,
  * so a level CodeBuddy adds later needs no code change here. An unrecognized id
  * still gets a readable name from its own spelling.
  *
- * `undefined` is returned rather than a partial value in three cases, because
- * the harness rejects each as INVALID_MODEL_REASONING and a rejected catalog is
- * worse than an absent capability:
- *   - no reasoning block at all;
- *   - a block with no `supportedEfforts` (`auto` declares an active `effort`
- *     but no list, so there is nothing for a user to choose between);
- *   - an empty or duplicate-only list.
+ * A model that reasons without disclosing a selectable list is still declared:
+ * it thinks at one level, and that level is what its requests carry anyway.
+ * Declaring nothing would drop the level from every request and make the
+ * harness reject a caller who named it.
  */
 function reasoningInfo(model: CodeBuddyModel): LlmModelReasoningInfo | undefined {
-  const supported = model.reasoning?.supportedEfforts
-  if (supported === undefined) return undefined
+  const reasoning = model.reasoning
+  const capable = model.supportsReasoning === true
+    || model.onlyReasoning === true
+    || (reasoning?.supportedEfforts?.length ?? 0) > 0
+  if (!capable) return undefined
 
   const seen = new Set<string>()
   const efforts: LlmReasoningEffortInfo[] = []
-  for (const raw of supported) {
-    const id = typeof raw === 'string' ? raw.trim() : ''
-    if (id.length === 0 || seen.has(id)) continue
+  const declare = (id: string): void => {
+    if (seen.has(id)) return
     seen.add(id)
-    efforts.push({
-      id: ReasoningEffortId(id),
-      name: EFFORT_NAMES[id] ?? id,
-    })
+    efforts.push({ id: ReasoningEffortId(id), name: EFFORT_NAMES[id] ?? id })
   }
-  if (efforts.length === 0) return undefined
-
-  // `defaultEffort` is preferred, falling back to the server-side active
-  // `effort`. Either is only honoured if it appears in the selectable list —
-  // the harness rejects a default it cannot find, and some catalog entries name
-  // an `effort` outside their own list.
-  const candidate = model.reasoning?.defaultEffort ?? model.reasoning?.effort
-  const defaultEffort = candidate !== undefined && seen.has(candidate)
-    ? ReasoningEffortId(candidate)
-    : undefined
-
-  return {
-    efforts,
-    ...defaultEffort === undefined ? {} : { defaultEffort },
+  for (const raw of reasoning?.supportedEfforts ?? []) {
+    const id = typeof raw === 'string' ? raw.trim() : ''
+    if (id.length > 0) declare(id)
   }
+
+  // The level a request carries when the caller picks none: the active `effort`
+  // first, then `defaultEffort`, then the first selectable one. Declared into
+  // the list because the harness rejects a default it cannot find there, and a
+  // named level is how a model says it always thinks that way.
+  const active = reasoning?.effort?.trim()
+  const preferred = reasoning?.defaultEffort?.trim()
+  const resolved = active !== undefined && active.length > 0 ? active
+    : preferred !== undefined && preferred.length > 0 ? preferred
+      : efforts[0]?.id
+  if (resolved === undefined) return undefined
+  declare(resolved)
+
+  // Always set: the level is what the model would use regardless, and the
+  // harness materializes it into every request that omits a choice.
+  return { efforts, defaultEffort: ReasoningEffortId(resolved) }
 }
 
 /**
@@ -255,11 +256,10 @@ export class CodeBuddyAdapter extends LlmAdapter {
       defaultMaxTokens: entry.maxOutputTokens !== undefined && entry.maxOutputTokens > 0
         ? entry.maxOutputTokens
         : connection.defaultMaxTokens,
-      // Reasoning levels come straight from the catalog's own `supportedEfforts`
-      // and `defaultEffort`. Declaring them is only safe because `stream()`
-      // forwards the selected level as `reasoning_effort`: the harness
-      // materializes its default into every request, so a declared-but-unsent
-      // capability would be a control that silently does nothing.
+      // Declaring reasoning is only safe because `stream()` forwards the level
+      // as `reasoning_effort`: the harness materializes a declared default into
+      // every request, so a declared-but-unsent capability would be a control
+      // that silently does nothing.
       ...reasoning === undefined ? {} : { reasoning },
     }
   }
