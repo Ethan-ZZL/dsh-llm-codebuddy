@@ -87,9 +87,8 @@ export interface DisplayTag {
  * Parse one raw catalog tag into a display pill, or drop it.
  *
  * Enterprise accounts receive pre-styled badges as `badge:<label>:#RRGGBB`
- * (e.g. `badge:new:#FF8C00`, `badge:内部模型:#3B82F6`) carrying the exact
- * color the CodeBuddy IDE renders; badge-form tags render as pills and
- * every other tag is dropped.
+ * (e.g. `badge:new:#FF8C00`), whose color is rendered as given; badge-form tags
+ * render as pills and every other tag is dropped.
  */
 function parseTag(tag: string): DisplayTag | undefined {
   const badge = /^badge:(.+):#([0-9a-f]{6})$/iu.exec(tag)

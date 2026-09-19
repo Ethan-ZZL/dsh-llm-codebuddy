@@ -198,9 +198,9 @@ function projectModel(model: CodeBuddyModel, promotion: CodeBuddyPromotionView |
  * The active promotion for one model, when one runs.
  *
  * Among the promotions whose `modelIds` cover the model and whose schedule is
- * currently active, the highest `priority` wins — the CodeBuddy IDE's own
- * selection rule. Only the display facts (badge color/label, hover texts,
- * discounted rate) cross the wire; scheduling stays host-side.
+ * currently active, the highest `priority` wins. Only the display facts (badge
+ * color/label, hover texts, discounted rate) cross the wire; scheduling stays
+ * host-side.
  * @param promotions - the promotions from the config read.
  * @param modelId - the model to resolve for.
  * @returns the winning promotion's display facts, or undefined.

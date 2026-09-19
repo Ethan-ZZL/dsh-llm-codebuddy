@@ -818,10 +818,9 @@ export const inject = [
  *
  * The shipped General-section rows (Enter behavior, Appearance) use CSS-module
  * classNames whose `:hover` and focus styles the dsh-css system injects; an
- * inline `style` object cannot express those pseudo-states, so the selector
- * looked flat and dead. This injects one `<style>` tag carrying the same
- * selector affordance (hover background + focus ring) under a plugin-scoped
- * class, mirroring how the shell's own feature plugins attach their CSS.
+ * inline `style` object cannot express those pseudo-states. This injects one
+ * `<style>` tag carrying the same selector affordance (hover background + focus
+ * ring) under a plugin-scoped class, as the shell's own feature plugins do.
  */
 const PREF_CSS = `
 .cb-prefRow{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--dsw-alias-border-l2)}

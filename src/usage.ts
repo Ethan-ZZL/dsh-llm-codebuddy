@@ -1,13 +1,12 @@
 /**
  * CodeBuddy quota/usage meter: fetch and parse the remaining allowance.
  *
- * CodeBuddy splits its billing plane the same way the gproxy reference splits
- * it: an enterprise tenant answers `get-enterprise-user-usage` (a single
- * limit/credit pair), while a personal account answers `get-user-resource`
- * (one window per active package). The two shapes share nothing but the
- * authenticated headers every CodeBuddy request carries, so the transport
- * and parsing paths fork once on whether the signed-in account disclosed an
- * `enterpriseId`.
+ * CodeBuddy splits its billing plane in two: an enterprise tenant answers
+ * `get-enterprise-user-usage` (a single limit/credit pair), while a personal
+ * account answers `get-user-resource` (one window per active package). The two
+ * shapes share nothing but the authenticated headers every CodeBuddy request
+ * carries, so the transport and parsing paths fork once on whether the
+ * signed-in account disclosed an `enterpriseId`.
  *
  * Every value that crosses into the Web client is a plain number/string, so
  * the {@link UsageSnapshot} returned here is owned data — no live session
@@ -73,10 +72,8 @@ function meterHeaders(identity: CodeBuddyIdentity): Record<string, string> {
   }
   if (identity.enterpriseId !== undefined) {
     headers['X-Enterprise-Id'] = identity.enterpriseId
-    // The meter plane expects the tenant id echoed under both names; the
-    // gproxy reference sets `x-tenant-id` to the same enterprise id alongside
-    // `x-enterprise-id`, and `/v2/billing/meter/*` has been observed to reject
-    // a request missing it.
+    // The meter plane expects the tenant id echoed under both names; a request
+    // carrying only one of them is rejected.
     headers['X-Tenant-Id'] = identity.enterpriseId
   }
   if (identity.departmentFullName !== undefined) {
@@ -123,10 +120,8 @@ function pointer(value: unknown, path: readonly string[]): unknown {
  * Format a Unix timestamp as `YYYY-MM-DD HH:mm:ss` in the local timezone, the
  * shape the personal meter expects for its `SlicePeriod*` bounds.
  *
- * The gproxy reference formats in UTC; the CodeBuddy service accepts either
- * as long as both bounds share the convention, and a local formatting matches
- * what the IDE client sends, so the read is less likely to fall outside the
- * server's own expectation.
+ * The service accepts either UTC or local as long as both bounds share the
+ * convention, and local formatting is what this client sends.
  * @param timestamp - Unix seconds.
  * @returns the formatted timestamp.
  */
@@ -235,17 +230,17 @@ function enterpriseUsage(data: unknown): UsageSnapshot | undefined {
 /**
  * Parse one meter reply into a snapshot.
  *
- * The gproxy reference tries the personal `Accounts` array under every pointer
- * root it has been observed using, and only falls back to the enterprise
- * single-window parse when no array matched — regardless of which request path
- * was sent. Mirroring that order keeps a personal account that happens to
- * carry an `enterpriseId` (or vice versa) parsing the shape it actually
- * answered, rather than the shape its credential suggested it would.
+ * The personal `Accounts` array is tried under either pointer root first, and
+ * the enterprise single-window parse is the fallback when no array matched,
+ * regardless of which request path was sent. That order keeps a personal
+ * account that happens to carry an `enterpriseId` (or vice versa) parsing the
+ * shape it actually answered, rather than the shape its credential suggested
+ * it would.
  * @param raw - the parsed reply body.
  * @returns the assembled snapshot, or `undefined` when the body carried nothing parseable.
  */
 export function parseUsage(raw: unknown): UsageSnapshot | undefined {
-  // Try every pointer root the personal plane has been observed using.
+  // Either root the personal plane nests the array under.
   const accountsRoots: readonly (readonly string[])[] = [
     ['data', 'Response', 'Data', 'Accounts'],
     ['data', 'data', 'Response', 'Data', 'Accounts'],
@@ -270,9 +265,7 @@ export function parseUsage(raw: unknown): UsageSnapshot | undefined {
  * The plane's `SlicePeriod*` filter scopes each package's usage to the slice
  * that overlaps the range, so a same-day `00:00:00`–`23:59:59` window returns
  * the currently active billing cycle's figures (the package whose
- * `CycleStartTime` ≤ today ≤ `CycleEndTime`). The earlier `PackageEndTimeRange*`
- * filter instead matched packages by their end time and missed active ones
- * whose cycle ends later in the month.
+ * `CycleStartTime` ≤ today ≤ `CycleEndTime`).
  * @returns the `{ begin, end }` pair as `YYYY-MM-DD HH:mm:ss` strings.
  */
 function todayRange(): { begin: string, end: string } {
@@ -335,7 +328,7 @@ async function postMeter(
  * Fetch the personal account's usage: one window per active package.
  *
  * The request carries the slice-period bounds (today's local day) and the
- * product/status filters the gproxy reference used.
+ * product/status filters the service expects.
  * @param identity - the signed-in identity, refreshed by the session.
  * @param signal - optional cancellation.
  * @returns the parsed snapshot, or `undefined` when the plane was unreachable.

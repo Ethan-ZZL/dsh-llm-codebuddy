@@ -188,8 +188,7 @@ export function hasDisclosedCapacity(model: CodeBuddyModel): boolean {
 
 /**
  * Minutes-past-midnight of one "HH:mm" window edge, or undefined when the
- * value is malformed. Hours run 0–23 and minutes 0–59, matching the CodeBuddy
- * IDE's own parser.
+ * value is malformed. Hours run 0–23 and minutes 0–59.
  */
 function timeToMinutes(value: string): number | undefined {
   const match = /^(\d{1,2}):(\d{2})$/.exec(value)
@@ -236,11 +235,11 @@ function nowMinutesIn(timezone: string | undefined): number {
 }
 
 /**
- * Whether one promotion's schedule currently covers the moment, mirroring the
- * CodeBuddy IDE's own evaluation: a disabled promotion never runs; a missing
- * schedule always does; `validFrom`/`validUntil` bound the whole promotion by
- * absolute instant, and `daily` windows are `[start, end)` ranges in the
- * schedule's timezone (a malformed window edge drops that window).
+ * Whether one promotion's schedule currently covers the moment: a disabled
+ * promotion never runs; a missing schedule always does; `validFrom`/`validUntil`
+ * bound the whole promotion by absolute instant, and `daily` windows are
+ * `[start, end)` ranges in the schedule's timezone (a malformed window edge
+ * drops that window).
  * @param promotion - one promotion entry.
  * @param now - the instant to test against (defaults to the current time).
  * @returns true when the promotion is active.
