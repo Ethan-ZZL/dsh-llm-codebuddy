@@ -869,6 +869,24 @@ export function apply(ctx: Context): void {
   const rpc = ctx.connection.rpc as ConnectionRpc
   const injected = () => ({ rpc, t: t as Translate })
 
+  // The language is resolved here and never reaches the host. Subscribers also
+  // fire for dictionary registrations, so only a real change is worth a request.
+  ctx.effect(() => {
+    const locale = ctx.locale as {
+      getSnapshot?: () => { active?: string }
+      subscribe?: (fn: () => void) => () => void
+    }
+    let last: string | undefined
+    const report = (): void => {
+      const active = locale.getSnapshot?.()?.active
+      if (active === undefined || active === last) return
+      last = active
+      void Promise.resolve(rpc.call(AUTH_CHANNEL, 'locale', active)).catch(() => {})
+    }
+    report()
+    return locale.subscribe?.(report)
+  }, 'dsh-llm-codebuddy: language reporting')
+
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'codebuddy',

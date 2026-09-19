@@ -311,7 +311,11 @@ export class CodeBuddyAuthService {
   /** In-flight handshakes by state id. */
   private readonly pending = new Map<string, PendingLogin>()
 
-  constructor(ctx: Context, private readonly session?: CodeBuddySession) {
+  constructor(
+    ctx: Context,
+    private readonly session?: CodeBuddySession,
+    private readonly reportLocale?: (tag: unknown) => void,
+  ) {
     ctx.inject(['connection', 'webServer'], (scopeCtx) => {
       const connection = scopeCtx.get('connection') as ConnectionService
       try {
@@ -444,6 +448,11 @@ export class CodeBuddyAuthService {
       case 'logout': return ok(await this.logout())
       case 'usage': return ok(await this.usage())
       case 'models': return ok(await this.models())
+      // The language is resolved in the browser and never reaches the host.
+      case 'locale': {
+        this.reportLocale?.(payload)
+        return ok(null)
+      }
       default: return err('not-found', `unknown auth endpoint: ${endpoint}`)
     }
   }

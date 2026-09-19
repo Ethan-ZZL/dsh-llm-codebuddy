@@ -273,8 +273,32 @@ export interface ConfigResponse extends ResponseBase {
   data?: CodeBuddyConfig
 }
 
-/** Error body an OpenAI-compatible chat endpoint returns on a non-2xx reply. */
+/**
+ * The envelope a non-2xx chat reply carries: the service's control-plane shape,
+ * or the OpenAI `{error: {...}}` a custom `baseURL` may speak. The wording is
+ * spread across `msg`, `extError`, and `displayMsg`, since a condition can be
+ * recognizable from only one of them.
+ */
 export interface WireError {
+  /** Service error code, e.g. 11115. */
+  code?: number
+  /** The service's own description of the failure. */
+  msg?: string
+  /** The provider fault the service wrapped. */
+  extError?: {
+    code?: string
+    type?: string
+    message?: string
+    param?: string
+  }
+  /** Curated user-facing sentences, keyed by language. */
+  displayMsg?: {
+    zh?: string
+    en?: string
+    'zh-hant'?: string
+    [language: string]: string | undefined
+  }
+  /** OpenAI-compatible envelope. */
   error?: {
     message?: string
     type?: string

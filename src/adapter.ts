@@ -69,6 +69,11 @@ export interface CodeBuddyAdapterOptions {
   options: () => CodeBuddyConnectionOptions
   /** Resolves the durable attachment store, when the host provides one. */
   resolveAttachments?: () => AttachmentReader | undefined
+  /**
+   * The language in effect, asked again on each failure so a change needs no
+   * re-registration. A BCP 47 tag; absence means English.
+   */
+  language?: () => string | undefined
 }
 
 /** Parse a `retry-after` header into milliseconds, when it carries a usable delay. */
@@ -93,18 +98,99 @@ function messagesHaveImage(messages: readonly Message[]): boolean {
 }
 
 /**
+ * The first entry that carries non-blank text.
+ *
+ * The type test is load-bearing, not defensive: a `displayMsg` lookup by the
+ * reported locale id can reach an inherited `Object.prototype` member (report
+ * `constructor` and the key names that function), and `trim` on a non-string
+ * would throw here — discarding the envelope and downgrading the error code.
+ */
+function firstText(values: readonly unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim().length > 0) return value.trim()
+  }
+  return undefined
+}
+
+/** What one failure envelope is worth: a sentence to report, and the text a classifier reads. */
+interface WireFailure {
+  /** The curated sentence in the reporting language, then the service's own fields. */
+  message?: string
+  /**
+   * Every field the envelope carries, joined. The classifiers match English
+   * identifiers as substrings, and each reads a different field: the curated
+   * `displayMsg` holds the overflow phrasing, a provider `msg` the quota phrasing.
+   */
+  detail: string
+}
+
+/**
+ * The `displayMsg` keys a locale id may name, best first.
+ *
+ * The service curates one Traditional Chinese wording under `zh-hant`, while a
+ * language pack selects it by region (`zh-TW`, `zh-HK`, `zh-MO`), so those ids
+ * have to reach the script key. Reading them as `zh` would answer a Traditional
+ * reader in Simplified.
+ */
+function wordingKeys(language: string | undefined): readonly string[] {
+  const key = language?.trim().toLowerCase()
+  if (key === undefined || key.length === 0) return []
+  if (key === 'zh-tw' || key === 'zh-hk' || key === 'zh-mo') return [key, 'zh-hant']
+  return [key]
+}
+
+/**
+ * Read one failure envelope, or nothing when the body is unreadable — the status
+ * still identifies that failure.
+ * @param body - the parsed error body.
+ * @param language - the language to report the service's wording in.
+ */
+function readWireFailure(body: WireError, language: string | undefined): WireFailure {
+  const provider = body.extError
+  const display = body.displayMsg
+  const compatible = body.error
+  // The reported locale id names the key directly; English stands as the
+  // service's own default.
+  const curated = firstText([
+    ...wordingKeys(language).map(key => display?.[key]),
+    display?.en,
+    display?.zh,
+  ])
+  const message = curated ?? firstText([
+    body.msg,
+    provider?.message,
+    compatible?.message,
+  ])
+  const detail = [
+    body.code === undefined ? undefined : String(body.code),
+    body.msg,
+    provider?.code,
+    provider?.type,
+    provider?.param,
+    provider?.message,
+    display?.en,
+    display?.zh,
+    display?.['zh-hant'],
+    compatible?.code,
+    compatible?.type,
+    compatible?.message,
+  ].filter(value => value !== undefined && value.length > 0).join(' ')
+  return { ...message === undefined ? {} : { message }, detail }
+}
+
+/**
  * Map an HTTP status onto a stable harness error code.
  * @param status - the non-2xx status.
- * @param error - the parsed provider error body, when readable.
+ * @param detail - every error wording the reply carried, when readable.
  * @returns the normalized code.
  */
-export function httpErrorCode(status: number, error?: WireError['error']): string {
+export function httpErrorCode(status: number, detail?: string): string {
   if (status === 401 || status === 403) return 'AUTH'
-  const detail = [error?.code, error?.type, error?.message].filter(Boolean).join(' ')
-  if (isQuotaExceededError(detail)) return QUOTA_EXCEEDED_CODE
+  const text = detail ?? ''
+  if (isQuotaExceededError(text)) return QUOTA_EXCEEDED_CODE
   if (status === 429) return 'RATE_LIMIT'
   if (status === 400) {
-    if (isContextWindowExceededError(detail)) return CONTEXT_WINDOW_EXCEEDED_CODE
+    if (isContextWindowExceededError(text)) return CONTEXT_WINDOW_EXCEEDED_CODE
     return 'INVALID_REQUEST'
   }
   if (status >= 500) return 'SERVER'
@@ -377,13 +463,18 @@ export class CodeBuddyAdapter extends LlmAdapter {
 
     if (!response.ok) {
       let message = `CodeBuddy API error (HTTP ${response.status})`
-      let providerError: WireError['error']
+      let failure: WireFailure = { detail: '' }
+      // Asked outside the parse block: a language source that throws must not be
+      // mistaken for a malformed body, which would discard the envelope.
+      let language: string | undefined
       try {
-        const parsed = await response.json() as WireError
-        providerError = parsed.error
-        if (providerError?.message !== undefined && providerError.message.length > 0) {
-          message = providerError.message
-        }
+        language = this.config.language?.()
+      } catch {
+        // The language is cosmetic; the failure is not.
+      }
+      try {
+        failure = readWireFailure(await response.json() as WireError, language)
+        if (failure.message !== undefined) message = failure.message
       } catch {
         // Only error-body parsing is swallowed: the status still identifies the
         // failure, so malformed JSON must not mask it.
@@ -396,7 +487,7 @@ export class CodeBuddyAdapter extends LlmAdapter {
       }
       const delay = providerRetryAfterMs(response.headers.get('retry-after'))
       const id = requestId(response.headers)
-      throw new LlmError(message, httpErrorCode(response.status, providerError), {
+      throw new LlmError(message, httpErrorCode(response.status, failure.detail), {
         status: response.status,
         ...delay === undefined ? {} : { providerRetryAfterMs: delay },
         ...id === undefined ? {} : { requestId: id },
