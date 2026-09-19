@@ -361,4 +361,6 @@ export interface WireRequest {
   stop?: string[]
   /** OpenAI-compatible thinking level; CodeBuddy's own effort vocabulary. */
   reasoning_effort?: string
+  /** Thinking-summary level, sent alongside `reasoning_effort`. */
+  reasoning_summary?: string
 }

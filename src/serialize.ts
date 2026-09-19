@@ -298,6 +298,7 @@ export function serializeMessages(
  * @param options - the assembled harness request.
  * @param supportsImages - whether the selected model declared image input.
  * @param attachments - the durable attachment store, when images may occur.
+ * @param reasoningSummary - the model's catalog thinking-summary level.
  * @param limits - per-request image limits; defaults when omitted.
  * @returns the request body.
  */
@@ -305,6 +306,7 @@ export async function serializeRequest(
   options: GenerateOptions,
   supportsImages: boolean,
   attachments?: AttachmentReader,
+  reasoningSummary?: string,
   limits: ImageRequestLimits = DEFAULT_IMAGE_REQUEST_LIMITS,
 ): Promise<WireRequest> {
   const images = supportsImages && attachments !== undefined
@@ -355,5 +357,10 @@ export async function serializeRequest(
     // this is normally set even when the caller chose nothing explicitly. The
     // id is CodeBuddy's own spelling, forwarded verbatim.
     ...options.reasoningEffort === undefined ? {} : { reasoning_effort: options.reasoningEffort },
+    // A summary only qualifies the effort it accompanies, so it is never sent
+    // on a request that carries no thinking level.
+    ...options.reasoningEffort === undefined || reasoningSummary === undefined
+      ? {}
+      : { reasoning_summary: reasoningSummary },
   }
 }

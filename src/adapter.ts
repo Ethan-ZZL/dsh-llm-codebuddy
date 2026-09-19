@@ -323,7 +323,12 @@ export class CodeBuddyAdapter extends LlmAdapter {
       }
     }
 
-    const body = await serializeRequest(options, supportsImages, this.config.resolveAttachments?.())
+    const body = await serializeRequest(
+      options,
+      supportsImages,
+      this.config.resolveAttachments?.(),
+      entry?.reasoning?.summary,
+    )
     // Serialized before the try so the transport label below covers only the
     // transport boundary.
     const payload = JSON.stringify(body)
