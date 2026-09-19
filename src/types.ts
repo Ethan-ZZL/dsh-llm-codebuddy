@@ -101,6 +101,8 @@ export interface CodeBuddyModel {
   /** Combined request/response context capacity. */
   maxAllowedSize?: number
   maxOutputTokens?: number
+  /** Sampling temperature this model is served at, when disclosed. */
+  temperature?: number
   supportsImages?: boolean
   supportsToolCall?: boolean
   supportsReasoning?: boolean

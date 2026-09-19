@@ -299,6 +299,8 @@ export function serializeMessages(
  * @param supportsImages - whether the selected model declared image input.
  * @param attachments - the durable attachment store, when images may occur.
  * @param reasoningSummary - the model's catalog thinking-summary level.
+ * @param temperature - the model's catalog sampling temperature, used only
+ *   when the caller expressed no preference.
  * @param limits - per-request image limits; defaults when omitted.
  * @returns the request body.
  */
@@ -307,6 +309,7 @@ export async function serializeRequest(
   supportsImages: boolean,
   attachments?: AttachmentReader,
   reasoningSummary?: string,
+  temperature?: number,
   limits: ImageRequestLimits = DEFAULT_IMAGE_REQUEST_LIMITS,
 ): Promise<WireRequest> {
   const images = supportsImages && attachments !== undefined
@@ -350,7 +353,12 @@ export async function serializeRequest(
     stream: true,
     stream_options: { include_usage: true },
     ...tools !== undefined && tools.length > 0 ? { tools } : {},
-    ...options.temperature === undefined ? {} : { temperature: options.temperature },
+    // An explicit caller value wins; the catalog's own figure only fills the
+    // gap, since it describes how the model is served rather than a request the
+    // caller composed.
+    ...options.temperature !== undefined
+      ? { temperature: options.temperature }
+      : temperature === undefined ? {} : { temperature },
     ...options.maxTokens === undefined ? {} : { max_tokens: options.maxTokens },
     ...options.stop === undefined ? {} : { stop: options.stop },
     // The harness materializes a model's default effort into every request, so

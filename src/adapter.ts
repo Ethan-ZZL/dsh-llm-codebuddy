@@ -135,6 +135,18 @@ function modelInfo(provider: string, model: CodeBuddyModel): LlmModelInfo {
   }
 }
 
+/**
+ * The catalog's sampling temperature, when it disclosed a usable one.
+ *
+ * The catalog arrives as remote JSON, so the field is checked rather than
+ * trusted: a non-number would otherwise be forwarded onto the wire, where the
+ * service would reject the whole request.
+ */
+function catalogTemperature(model: CodeBuddyModel | undefined): number | undefined {
+  const value = model?.temperature
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
 /** Human-readable names for CodeBuddy's effort vocabulary. */
 const EFFORT_NAMES: Readonly<Record<string, string>> = {
   low: 'Low',
@@ -328,6 +340,7 @@ export class CodeBuddyAdapter extends LlmAdapter {
       supportsImages,
       this.config.resolveAttachments?.(),
       entry?.reasoning?.summary,
+      catalogTemperature(entry),
     )
     // Serialized before the try so the transport label below covers only the
     // transport boundary.
