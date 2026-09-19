@@ -16,7 +16,7 @@
  * @module dsh-llm-codebuddy/usage
  */
 
-import { CODEBUDDY_ENDPOINT, CODEBUDDY_IDE_VERSION } from './constants.js'
+import { CODEBUDDY_ENDPOINT, CODEBUDDY_IDE_USER_AGENT } from './constants.js'
 import type { CodeBuddyIdentity } from './codebuddy.js'
 
 /** One metering window: a named allowance and how much of it is spent. */
@@ -55,11 +55,10 @@ interface MeterErrorResponse {
 /**
  * The authenticated headers every CodeBuddy meter request carries.
  *
- * Mirrors {@link CodeBuddySession.authHeaders} plus the IDE-version pair the
- * catalog read adds, because the meter plane rejects a request missing them
- * just as `/v3/config` does. Kept here rather than re-exported from the
- * session so the meter path owns its own header set and never couples to the
- * chat adapter's.
+ * Mirrors {@link CodeBuddySession.authHeaders} plus the user-agent the catalog
+ * read adds, because the meter plane rejects a request missing it just as
+ * `/v3/config` does. Kept here rather than re-exported from the session so the
+ * meter path owns its own header set and never couples to the chat adapter's.
  * @param identity - the signed-in identity.
  * @returns the request headers.
  */
@@ -67,7 +66,7 @@ function meterHeaders(identity: CodeBuddyIdentity): Record<string, string> {
   const headers: Record<string, string> = {
     'Accept': 'application/json',
     'Content-Type': 'application/json',
-    'User-Agent': `CodeBuddyIDE/${CODEBUDDY_IDE_VERSION} CodeBuddy/${CODEBUDDY_IDE_VERSION}`,
+    'User-Agent': CODEBUDDY_IDE_USER_AGENT,
     'Authorization': `Bearer ${identity.accessToken}`,
     'X-Domain': identity.domain,
     'X-User-Id': identity.uid,

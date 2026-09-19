@@ -14,7 +14,7 @@
 import {
   AUTH_PENDING_CODE,
   CODEBUDDY_ENDPOINT,
-  CODEBUDDY_IDE_VERSION,
+  CODEBUDDY_IDE_USER_AGENT,
   LOGIN_POLL_INTERVAL_MS,
   LOGIN_TIMEOUT_MS,
 } from './constants.js'
@@ -63,7 +63,7 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
  * @throws Error when the service refuses or answers an unusable body.
  */
 export async function requestAuthState(signal?: AbortSignal): Promise<AuthState> {
-  const response = await fetch(`${CODEBUDDY_ENDPOINT}/v2/plugin/auth/state?platform=CLI`, {
+  const response = await fetch(`${CODEBUDDY_ENDPOINT}/v2/plugin/auth/state?platform=ide`, {
     method: 'POST',
     headers: {
       'Accept': 'application/json',
@@ -281,7 +281,7 @@ export async function getConfig(
 ): Promise<CodeBuddyConfig> {
   const headers: Record<string, string> = {
     'Accept': 'application/json',
-    'User-Agent': `CodeBuddyIDE/${CODEBUDDY_IDE_VERSION} CodeBuddy/${CODEBUDDY_IDE_VERSION}`,
+    'User-Agent': CODEBUDDY_IDE_USER_AGENT,
     'Authorization': `Bearer ${identity.accessToken}`,
     'X-Domain': identity.domain,
     'X-User-Id': identity.uid,

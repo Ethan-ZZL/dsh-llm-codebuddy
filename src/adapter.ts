@@ -35,8 +35,8 @@ import type {
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import {
-  CODEBUDDY_CLI_VERSION,
   CODEBUDDY_DISPLAY_NAME,
+  CODEBUDDY_IDE_USER_AGENT,
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_TOKENS,
 } from './constants.js'
@@ -440,7 +440,7 @@ export class CodeBuddyAdapter extends LlmAdapter {
           ...headers,
           'content-type': 'application/json',
           'accept': 'text/event-stream',
-          'user-agent': `CLI/${CODEBUDDY_CLI_VERSION} CodeBuddy/${CODEBUDDY_CLI_VERSION}`,
+          'user-agent': CODEBUDDY_IDE_USER_AGENT,
           ...options.sessionId === undefined ? {} : { 'X-Conversation-ID': options.sessionId },
           'X-Model-ID': options.model,
         },

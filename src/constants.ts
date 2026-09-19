@@ -24,11 +24,11 @@ export const CODEBUDDY_ENDPOINT = 'https://copilot.tencent.com'
  */
 export const CODEBUDDY_CHAT_BASE = `${CODEBUDDY_ENDPOINT}/v2`
 
-/** IDE version reported when reading the config/model catalog. */
-export const CODEBUDDY_IDE_VERSION = '4.9.8'
+/** Version this client reports to the service. */
+export const CODEBUDDY_IDE_VERSION = '4.12.0'
 
-/** CLI version reported on chat requests. */
-export const CODEBUDDY_CLI_VERSION = '2.96.0'
+/** User-agent this client sends. */
+export const CODEBUDDY_IDE_USER_AGENT = `CodeBuddyIDE/${CODEBUDDY_IDE_VERSION}`
 
 /**
  * Context capacity assumed for a model the catalog does not describe at all.
