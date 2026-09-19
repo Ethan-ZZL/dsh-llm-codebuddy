@@ -94,13 +94,33 @@ export function normalizeToolArguments(
   return changed ? JSON.stringify(record) : argumentsText
 }
 
-/** One block under assembly. */
+/**
+ * Accept one streamed identity field for a tool call.
+ *
+ * `id` and `name` are identity, not accumulation: the wire sends each once, on
+ * the call's first fragment. A continuation fragment repeating either as `''`
+ * or `null` means "no update", never "clear" — overwriting with it would hand
+ * the harness a nameless call, which it rejects as UNKNOWN_TOOL. The wire type
+ * is a claim about a remote encoder, so only a non-empty string supersedes the
+ * established value; testing `.length` without `typeof` would throw on `null`.
+ * @param current - the identity established by an earlier fragment.
+ * @param incoming - the field as parsed from this fragment.
+ * @returns the identity in force after this fragment.
+ */
+function acceptIdentity(current: string | undefined, incoming: string | null | undefined): string | undefined {
+  return typeof incoming === 'string' && incoming.length > 0 ? incoming : current
+}
+
+/**
+ * One block under assembly. `callId` and `name` admit an explicit `undefined`
+ * because the identity helper returns one until a fragment supplies it.
+ */
 interface OpenBlock {
   index: number
   kind: 'text' | 'reasoning' | 'tool-call'
   text: string
-  callId?: string
-  name?: string
+  callId?: string | undefined
+  name?: string | undefined
 }
 
 /**
@@ -254,14 +274,9 @@ export async function* translate(
           toolBlocks.set(call.index, block)
           yield { type: 'block-start', index: block.index, blockType: 'tool-call' }
         }
-        // Only the opening delta carries the name and id; CodeBuddy repeats
-        // both as `""` on every continuation frame for the same index. Treating
-        // those as values would erase what was already learned and hand the
-        // harness a nameless call, which it rejects as UNKNOWN_TOOL. So a
-        // non-empty value is required to overwrite, not merely a defined one.
-        if (call.id !== undefined && call.id.length > 0) block.callId = call.id
-        const name = call.function?.name
-        if (name !== undefined && name.length > 0) block.name = name
+        // Identity only; CodeBuddy blanks both on continuation fragments.
+        block.callId = acceptIdentity(block.callId, call.id)
+        block.name = acceptIdentity(block.name, call.function?.name)
         const fragment = call.function?.arguments ?? ''
         block.text += fragment
         yield {

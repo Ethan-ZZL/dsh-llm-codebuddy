@@ -287,13 +287,18 @@ export interface WireUsage {
   completion_tokens_details?: { reasoning_tokens?: number }
 }
 
-/** One streamed tool-call fragment. */
+/**
+ * One streamed tool-call fragment. `id` and `name` are identity, sent once on
+ * the first fragment and repeated as `''`/`null` on continuations; the wire
+ * type only claims what a remote encoder does, so all three stay nullable and
+ * the consumer decides what an empty value means.
+ */
 export interface WireToolCall {
   index: number
-  id?: string
+  id?: string | null
   function?: {
-    name?: string
-    arguments?: string
+    name?: string | null
+    arguments?: string | null
   }
 }
 
