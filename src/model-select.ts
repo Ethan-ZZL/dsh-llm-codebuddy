@@ -13,7 +13,7 @@
 import type { ReactElement } from 'react'
 import { createElement as h, Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { IconChevronDownOutline14, IconChevronRightOutline14, IconCheckOutline16, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { SnapshotStore } from './client-types.js'
+import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { CODEBUDDY_PROVIDER } from './constants.js'
 
 /**
@@ -121,7 +121,7 @@ function rowRate(credits: string | undefined, promotion: EnrichedModel['promotio
     label,
     promo: promoLabel !== undefined,
     free: isFreeCredits(label),
-    ...differs && promotion.color !== undefined ? { tint: promotion.color } : {},
+    ...differs && promotion !== undefined && promotion.color !== undefined ? { tint: promotion.color } : {},
   }
 }
 
