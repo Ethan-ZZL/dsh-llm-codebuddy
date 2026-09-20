@@ -13,7 +13,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { useState, useEffect, useCallback, createElement as h, Fragment, type ChangeEvent, type ReactElement } from 'react'
+import { useState, useEffect, useCallback, createElement as h, Fragment, type ChangeEvent, type HTMLAttributes, type ReactElement } from 'react'
 import {
   Button,
   Tooltip,
@@ -333,15 +333,6 @@ function usageTooltip(window: UsageWindow, t: Translate): string {
   return lines.join('\n')
 }
 
-/** Render a tooltip around an arbitrary React anchor accepted at runtime. */
-function tooltip(props: { label: string, side: 'top' | 'right', delayMs: number }, anchor: ReactElement): ReactElement {
-  return h(
-    Tooltip as unknown as (props: { label: string, side: 'top' | 'right', delayMs: number }, child: ReactElement) => ReactElement,
-    props,
-    anchor,
-  )
-}
-
 /**
  * The usage indicator rendered above the Settings trigger in the sidebar foot.
  *
@@ -431,14 +422,13 @@ function UsageIndicator({ rpc, t, wide }: {
   const color = usageColor(derived.usedPercent, dangerPct)
 
   if (wide) {
-    return tooltip({ label, side: 'top', delayMs: 300 },
-      h('div', { style: s.usageWrap },
-        h('div', { style: s.usageBar },
-          h('div', { style: { ...s.usageFill, width: `${Math.min(pct, 100)}%`, background: color } }),
-        ),
-        h('span', { style: s.usagePct }, `${Math.round(pct)}%`),
+    const anchor: ReactElement<HTMLAttributes<HTMLDivElement>> = h('div', { style: s.usageWrap },
+      h('div', { style: s.usageBar },
+        h('div', { style: { ...s.usageFill, width: `${Math.min(pct, 100)}%`, background: color } }),
       ),
+      h('span', { style: s.usagePct }, `${Math.round(pct)}%`),
     )
+    return h(Tooltip, { label, side: 'top', delayMs: 300, children: anchor })
   }
   // Rail: a ring whose arc fills with usage, with the percentage centered
   // inside it. The full label stays in the tooltip so the rail column keeps its
@@ -454,36 +444,35 @@ function UsageIndicator({ rpc, t, wide }: {
   const c = 2 * Math.PI * r
   const dash = (Math.min(pct, 100) / 100) * c
   const arcTransform = `rotate(-90 ${cx} ${cy})`
-  return tooltip({ label, side: 'right', delayMs: 300 },
-    h('div', { style: s.usageRail },
-      h('svg', { width: size, height: size, viewBox: `0 0 ${size} ${size}` },
-        h('circle', {
-          cx, cy, r,
-          fill: 'none',
-          stroke: 'var(--dsw-alias-border-l2)',
-          strokeWidth: stroke,
-        }),
-        h('circle', {
-          cx, cy, r,
-          fill: 'none',
-          stroke: color,
-          strokeWidth: stroke,
-          strokeLinecap: 'round',
-          strokeDasharray: `${dash} ${c}`,
-          transform: arcTransform,
-        }),
-        h('text', {
-          x: cx,
-          y: cy,
-          textAnchor: 'middle' as const,
-          dominantBaseline: 'central' as const,
-          fill: 'var(--dsw-alias-label-primary)',
-          fontSize: 8,
-          fontWeight: 600,
-        }, `${Math.round(pct)}`),
-      ),
+  const anchor: ReactElement<HTMLAttributes<HTMLDivElement>> = h('div', { style: s.usageRail },
+    h('svg', { width: size, height: size, viewBox: `0 0 ${size} ${size}` },
+      h('circle', {
+        cx, cy, r,
+        fill: 'none',
+        stroke: 'var(--dsw-alias-border-l2)',
+        strokeWidth: stroke,
+      }),
+      h('circle', {
+        cx, cy, r,
+        fill: 'none',
+        stroke: color,
+        strokeWidth: stroke,
+        strokeLinecap: 'round',
+        strokeDasharray: `${dash} ${c}`,
+        transform: arcTransform,
+      }),
+      h('text', {
+        x: cx,
+        y: cy,
+        textAnchor: 'middle' as const,
+        dominantBaseline: 'central' as const,
+        fill: 'var(--dsw-alias-label-primary)',
+        fontSize: 8,
+        fontWeight: 600,
+      }, `${Math.round(pct)}`),
     ),
   )
+  return h(Tooltip, { label, side: 'right', delayMs: 300, children: anchor })
 }
 
 /** How often the usage indicator refreshes, in ms. */

@@ -190,9 +190,15 @@ export interface EnrichedCatalogRpc {
   models: () => Promise<EnrichedModel[] | undefined>
 }
 
-/** Tooltip accepts its anchor as a JSX child; this element-factory face keeps `h()` overload-free. */
-const tooltip = (props: { side: 'top' | 'right' | 'bottom', delayMs: number, label: ReactElement }, anchor: ReactElement): ReactElement =>
-  h(Tooltip as unknown as (p: { side: 'top' | 'right' | 'bottom', delayMs: number, label: ReactElement }, children: ReactElement) => ReactElement, props, anchor)
+/**
+ * Tooltip's runtime accepts rich React labels although the installed declaration
+ * only exposes text labels. Keep that one compatibility cast isolated while
+ * preserving the component's native `children` anchor contract.
+ */
+type NativeTooltipProps = Parameters<typeof Tooltip>[0]
+type RichTooltipProps = Omit<NativeTooltipProps, 'label' | 'children'> & { label: ReactElement }
+const richTooltip = ({ label, ...props }: RichTooltipProps, children: NativeTooltipProps['children']): ReactElement =>
+  h(Tooltip, { ...props, label: label as unknown as NativeTooltipProps['label'], children })
 
 /**
  * The hover bubble content for one model row: name + id on the first line
@@ -456,7 +462,7 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
               const rate = rowRate(creditsOf(extra), extra?.promotion)
               const badges = (extra?.tags ?? []).map(parseTag).filter((tag): tag is DisplayTag => tag !== undefined)
               const promotion = extra?.promotion
-              return tooltip({ label: modelTooltipContent(model, extra, zh), side: 'top', delayMs: 300 },
+              return richTooltip({ label: modelTooltipContent(model, extra, zh), side: 'top', delayMs: 300 },
                 h('button', {
                   key: model.id,
                   ref: itemRef(),
