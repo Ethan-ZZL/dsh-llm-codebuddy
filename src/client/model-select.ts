@@ -100,15 +100,6 @@ function isFreeCredits(credits: string | undefined): boolean {
 }
 
 /**
- * The locale-appropriate model description: Chinese while the UI locale is zh,
- * English otherwise, each falling back to the other when its own is absent.
- */
-function descriptionOf(enriched: EnrichedModel | undefined, zh: boolean): string | undefined {
-  if (enriched === undefined) return undefined
-  return zh ? enriched.descriptionZh ?? enriched.descriptionEn : enriched.descriptionEn ?? enriched.descriptionZh
-}
-
-/**
  * Fetch the enriched CodeBuddy catalog, refreshed on every menu open and
  * whenever the harness catalog behind the open menu changes.
  *
@@ -156,15 +147,13 @@ const richTooltip = ({ label, ...props }: RichTooltipProps, children: NativeTool
   h(Tooltip, { ...props, label: label as unknown as NativeTooltipProps['label'], children })
 
 /** Rich hover content for one model row. */
-function modelTooltipContent(model: { id: string, name: string, description?: string }, enriched: EnrichedModel | undefined, zh: boolean): ReactElement {
+function modelTooltipContent(model: { id: string, name: string, description?: string }, enriched: EnrichedModel | undefined): ReactElement {
   const badges = (enriched?.tags ?? []).map(parseTag).filter((tag): tag is DisplayTag => tag !== undefined)
   const promotion = enriched?.promotion
-  // CodeBuddy's own locale descriptions first, then the harness catalog
-  // description — every row, any provider, gets a tooltip description.
-  const description = descriptionOf(enriched, zh) ?? model.description
-  // Promotion hover text follows the same locale order as descriptions.
-  const promotionText = promotion === undefined ? undefined
-    : zh ? promotion.textZh ?? promotion.textEn : promotion.textEn ?? promotion.textZh
+  // CodeBuddy's own description arrives in the displayed language already;
+  // every row, any provider, still gets the catalog description as a fallback.
+  const description = enriched?.description ?? model.description
+  const promotionText = promotion?.text
   return h('div', { className: 'cbms-tip' },
     h('div', { className: 'cbms-tipNameRow' },
       h('span', { className: 'cbms-tipName' }, model.name),
@@ -197,11 +186,10 @@ function modelTooltipContent(model: { id: string, name: string, description?: st
  * Props mirror the official seat's contract (`conversation.input.model`):
  * owner share `locked` plus the injected face over the shared directory.
  */
-export function CodeBuddyModelSelect({ locked, available, directory, load, select, rpc, t, zh }: {
+export function CodeBuddyModelSelect({ locked, available, directory, load, select, rpc, t }: {
   locked: boolean
   rpc: EnrichedCatalogRpc
   t: ModelSelectT
-  zh: boolean
 } & ModelDirectoryFace): ReactElement | null {
   const state = useSyncExternalStore(
     (fn) => directory.subscribe(fn),
@@ -417,7 +405,7 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
               const promotion = extra?.promotion
               return richTooltip({
                 key: model.id,
-                label: modelTooltipContent(model, extra, zh),
+                label: modelTooltipContent(model, extra),
                 side: 'top',
                 delayMs: 300,
               }, h('button', {

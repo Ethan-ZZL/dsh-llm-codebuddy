@@ -24,6 +24,8 @@ import type { CodeBuddySession } from './session.js'
 import { clearStorage, loadStorage, saveStorage } from './storage.js'
 import type { CodeBuddyStorage } from './storage.js'
 import { hasDisclosedCapacity, isPromotionActive } from './types.js'
+import { prefersChinese } from './locale.js'
+import type { MessageLocale } from './locale.js'
 import type { CodeBuddyModel, CodeBuddyModelPromotion, CodeBuddyPromotionDiscount } from './types.js'
 import type { UsageSnapshot, UsageWindow } from './usage.js'
 import { CODEBUDDY_AUTH_CHANNEL } from './protocol.js'
@@ -90,15 +92,27 @@ function projectWindow(window: UsageWindow): CodeBuddyUsageWindow {
  * Project one catalog model into the RPC-safe shape the client receives.
  * `undefined` optionals are widened only when present, so the client can test
  * for absence with a single `!== undefined`.
+ *
+ * The description resolves to one string here, since the host knows the
+ * language and the client renders only one of CodeBuddy's wordings.
+ * @param model - one catalog entry.
+ * @param promotion - the winning promotion's display facts, when one runs.
+ * @param zh - whether the browser is displaying Chinese.
  */
-function projectModel(model: CodeBuddyModel, promotion: CodeBuddyPromotionView | undefined): CodeBuddyModelEntry {
+function projectModel(
+  model: CodeBuddyModel,
+  promotion: CodeBuddyPromotionView | undefined,
+  zh: boolean,
+): CodeBuddyModelEntry {
+  const description = zh
+    ? model.descriptionZh ?? model.descriptionEn
+    : model.descriptionEn ?? model.descriptionZh
   return {
     id: model.id,
     name: model.name,
     ...model.credits === undefined ? {} : { credits: model.credits },
     ...model.tags === undefined || model.tags.length === 0 ? {} : { tags: model.tags },
-    ...model.descriptionZh === undefined ? {} : { descriptionZh: model.descriptionZh },
-    ...model.descriptionEn === undefined ? {} : { descriptionEn: model.descriptionEn },
+    ...description === undefined ? {} : { description },
     ...promotion === undefined ? {} : { promotion },
   }
 }
@@ -114,7 +128,11 @@ function projectModel(model: CodeBuddyModel, promotion: CodeBuddyPromotionView |
  * @param modelId - the model to resolve for.
  * @returns the winning promotion's display facts, or undefined.
  */
-function promotionFor(promotions: readonly CodeBuddyModelPromotion[], modelId: string): CodeBuddyPromotionView | undefined {
+function promotionFor(
+  promotions: readonly CodeBuddyModelPromotion[],
+  modelId: string,
+  zh: boolean,
+): CodeBuddyPromotionView | undefined {
   let winner: { priority: number, view: CodeBuddyPromotionView } | undefined
   for (const promotion of promotions) {
     if (promotion.modelIds === undefined || !promotion.modelIds.includes(modelId)) continue
@@ -124,14 +142,14 @@ function promotionFor(promotions: readonly CodeBuddyModelPromotion[], modelId: s
     const priority = promotion.priority ?? 0
     if (winner !== undefined && winner.priority >= priority) continue
     const { textZh, textEn } = promotion.hover ?? {}
+    const text = zh ? textZh ?? textEn : textEn ?? textZh
     const discountedRate = discountedRateOf(promotion.discount)
     winner = {
       priority,
       view: {
         color,
         label,
-        ...textZh === undefined ? {} : { textZh },
-        ...textEn === undefined ? {} : { textEn },
+        ...text === undefined ? {} : { text },
         ...discountedRate === undefined ? {} : { discountedRate },
       },
     }
@@ -223,7 +241,7 @@ export class CodeBuddyAuthService {
   constructor(
     ctx: Context,
     private readonly session?: CodeBuddySession,
-    private readonly reportLocale?: (tag: unknown) => void,
+    private readonly locale?: MessageLocale,
   ) {
     ctx.inject(['connection', 'webServer'], (scopeCtx) => {
       const connection = scopeCtx.get('connection') as ConnectionService
@@ -359,7 +377,7 @@ export class CodeBuddyAuthService {
       case 'models': return ok(await this.models())
       // The language is resolved in the browser and never reaches the host.
       case 'locale': {
-        this.reportLocale?.(payload)
+        this.locale?.report(payload)
         return ok(null)
       }
       default: return err('not-found', `unknown auth endpoint: ${endpoint}`)
@@ -496,10 +514,12 @@ export class CodeBuddyAuthService {
     // signed-out session must not look like a signed-in one with no models.
     if (!(await this.session.isUsable())) return { loggedIn: false, models: [] }
     const { models, promotions } = await this.session.refreshCatalog()
+    // Read once per catalog read, so one menu cannot split between wordings.
+    const zh = prefersChinese(this.locale?.tag())
     return {
       loggedIn: true,
       models: models.filter(hasDisclosedCapacity).map(model =>
-        projectModel(model, promotionFor(promotions, model.id))),
+        projectModel(model, promotionFor(promotions, model.id, zh), zh)),
     }
   }
 

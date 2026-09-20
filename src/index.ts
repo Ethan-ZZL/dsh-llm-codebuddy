@@ -25,6 +25,7 @@ import {
   DEFAULT_STREAM_IDLE_TIMEOUT_MS,
 } from './constants.js'
 import { CodeBuddySession } from './session.js'
+import { MessageLocale } from './locale.js'
 
 export { CodeBuddyAdapter, httpErrorCode } from './adapter.js'
 export type { CodeBuddyAdapterOptions, CodeBuddyConnectionOptions } from './adapter.js'
@@ -51,6 +52,7 @@ export type { RefreshFailure, RefreshResult } from './codebuddy.js'
 export * from './constants.js'
 export { hasDisclosedCapacity } from './types.js'
 export type * from './types.js'
+export { MessageLocale, prefersChinese, wordingKeys } from './locale.js'
 
 /** Cordis plugin name. */
 export const name = 'llm-codebuddy'
@@ -124,26 +126,6 @@ export function resolveConnectionOptions(config: Config = {}): CodeBuddyConnecti
 /** How often the plugin re-reads the catalog to notice server-side edits, in ms. */
 const CATALOG_POLL_INTERVAL_MS = 5 * 60 * 1000
 
-/**
- * The language the Web client is displaying, as last reported by it.
- *
- * The client resolves this itself and that result exists only client-side, so the
- * host cannot derive it. Nothing reported reads as English.
- */
-export class MessageLocale {
-  private reported: string | undefined
-
-  /** Record the resolved tag, or clear it when the client sent none. */
-  report(tag: unknown): void {
-    this.reported = typeof tag === 'string' && tag.length > 0 ? tag : undefined
-  }
-
-  /** The tag in effect, or undefined while the client has reported none. */
-  tag(): string | undefined {
-    return this.reported
-  }
-}
-
 /** Mount the plugin: resolve config, then register the route. */
 export function apply(ctx: Context, config: Config = {}): void {
   // Resolved once at load so a bad entry config fails loudly here; the thunk
@@ -186,7 +168,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     return () => { clearInterval(timer) }
   }, 'dsh-llm-codebuddy: catalog change polling')
 
-  new CodeBuddyAuthService(ctx, session, (tag) => { messageLocale.report(tag) })
+  new CodeBuddyAuthService(ctx, session, messageLocale)
 
   // A signed-out mount is legitimate: the route registers, and the first
   // request explains how to sign in. Saying so once at load keeps that from

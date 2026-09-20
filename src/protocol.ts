@@ -54,8 +54,7 @@ export interface CodeBuddyUsageResult {
 export interface CodeBuddyPromotionView {
   color: string
   label: string
-  textZh?: string
-  textEn?: string
+  text?: string
   discountedRate?: string
 }
 
@@ -65,8 +64,7 @@ export interface CodeBuddyModelEntry {
   name: string
   credits?: string
   tags?: string[]
-  descriptionZh?: string
-  descriptionEn?: string
+  description?: string
   promotion?: CodeBuddyPromotionView
 }
 

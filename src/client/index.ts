@@ -848,9 +848,9 @@ export function apply(ctx: Context): void {
   injectPrefCss()
   injectModelSelectCss()
 
-  const t = ctx.locale.bind(NS)
   const rpc = bindCodeBuddyRpc(ctx.connection.rpc)
-  const injected = () => ({ rpc, t })
+  const t = ctx.locale.bind(NS)
+  const injected = () => ({ rpc })
 
   // The language is resolved here and never reaches the host. Subscribers also
   // fire for dictionary registrations, so only a real change is worth a request.
@@ -924,22 +924,12 @@ export function apply(ctx: Context): void {
             directory.select(selection).then(() => true, () => false),
         }
       },
-    }, (props: Omit<Parameters<typeof CodeBuddyModelSelect>[0], 'rpc' | 't' | 'zh'>) => CodeBuddyModelSelect({
+    }, (props: Omit<Parameters<typeof CodeBuddyModelSelect>[0], 'rpc' | 't'>) => CodeBuddyModelSelect({
       ...props,
       rpc: enrichedRpc,
       t: modelT,
-      zh: localeActiveZh(ctx),
     })))
   })
-}
-
-/** Resolve Chinese copy, falling back to zh if the locale snapshot is unavailable. */
-function localeActiveZh(ctx: Context): boolean {
-  try {
-    return ctx.locale.getSnapshot?.()?.active !== 'en'
-  } catch {
-    return true
-  }
 }
 
 /** Inject the model seat's stylesheet once per document. */

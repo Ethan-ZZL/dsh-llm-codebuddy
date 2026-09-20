@@ -44,6 +44,7 @@ import {
 } from './constants.js'
 import { NotLoggedInError, SessionUnavailableError } from './session.js'
 import type { CodeBuddySession } from './session.js'
+import { wordingKeys } from './locale.js'
 import { parseSse } from './sse.js'
 import type { AttachmentReader } from './serialize.js'
 import { serializeRequest } from './serialize.js'
@@ -126,21 +127,6 @@ interface WireFailure {
    * `displayMsg` holds the overflow phrasing, a provider `msg` the quota phrasing.
    */
   detail: string
-}
-
-/**
- * The `displayMsg` keys a locale id may name, best first.
- *
- * The service curates one Traditional Chinese wording under `zh-hant`, while a
- * language pack selects it by region (`zh-TW`, `zh-HK`, `zh-MO`), so those ids
- * have to reach the script key. Reading them as `zh` would answer a Traditional
- * reader in Simplified.
- */
-function wordingKeys(language: string | undefined): readonly string[] {
-  const key = language?.trim().toLowerCase()
-  if (key === undefined || key.length === 0) return []
-  if (key === 'zh-tw' || key === 'zh-hk' || key === 'zh-mo') return [key, 'zh-hant']
-  return [key]
 }
 
 /**
