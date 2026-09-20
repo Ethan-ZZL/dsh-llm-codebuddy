@@ -13,7 +13,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
-import type { ResolvedRetryPolicy, RetryPolicyConfig } from '@deepseek-ai/dsh-llm'
+import type { RetryPolicyConfig } from '@deepseek-ai/dsh-llm'
 import { CodeBuddyAdapter } from './adapter.js'
 import type { CodeBuddyConnectionOptions } from './adapter.js'
 import { CodeBuddyAuthService } from './auth-service.js'

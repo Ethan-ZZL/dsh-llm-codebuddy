@@ -344,7 +344,7 @@ export class CodeBuddyAuthService {
   }
 
   /** Route one RPC endpoint to its handler. */
-  private async dispatch(endpoint: string, payload: unknown, signal: AbortSignal): Promise<RpcOk<unknown> | RpcErr> {
+  private async dispatch(endpoint: string, payload: unknown, _signal: AbortSignal): Promise<RpcOk<unknown> | RpcErr> {
     switch (endpoint) {
       case 'status': return ok(await this.status())
       case 'startLogin': return ok(await this.startLogin())
