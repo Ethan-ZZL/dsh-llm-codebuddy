@@ -31,7 +31,7 @@ const externals = [
 ]
 
 await build({
-  entryPoints: [resolve(here, 'src/client.ts')],
+  entryPoints: [resolve(here, 'src/client/index.ts')],
   bundle: true,
   format: 'cjs',
   // Wrap the CJS body in the module-loader envelope: the shell's loader calls

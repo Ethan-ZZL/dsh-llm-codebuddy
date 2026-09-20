@@ -22,7 +22,7 @@ import {
   IconChevronDownOutline14,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { CodeBuddyModelSelect, MODEL_SELECT_CSS } from './model-select.js'
-import type { ModelSelectT } from './model-select.js'
+import type { ModelDirectoryFace, ModelSelectT } from './model-select.js'
 
 /** The RPC channel the host auth service listens on (mirror of the host constant). */
 const AUTH_CHANNEL = '/codebuddy'
@@ -215,6 +215,40 @@ interface ConnectionRpc {
   call: <T>(channel: string, endpoint: string, payload?: unknown, signal?: AbortSignal) => Promise<RpcResult<T>>
 }
 
+/** Minimal locale service contract consumed by the browser plugin. */
+interface ClientLocaleFace {
+  register: (namespace: string, dictionaries: Record<string, Record<string, string>>) => () => void
+  bind: (namespace: string) => Translate
+  getSnapshot?: () => { active: string }
+  subscribe?: (listener: () => void) => () => void
+}
+
+/** Minimal slot registry contract consumed by the browser plugin. */
+interface ClientSlotsFace {
+  inject: (name: string, callback: () => () => void) => () => void
+  register: <Props>(
+    config: Record<string, unknown>,
+    component: (props: Props) => ReactElement | null,
+  ) => () => void
+}
+
+/** Browser services dynamically injected by the DSH client runtime. */
+type ClientContext = Context & {
+  locale: ClientLocaleFace
+  connection: { rpc: ConnectionRpc }
+  slots: ClientSlotsFace
+  modelDirectories: {
+    directoryFor: (sessionId: string) => {
+      store: ModelDirectoryFace['directory']
+      load: () => Promise<unknown>
+      select: ModelDirectoryFace['select']
+    }
+  }
+  sessions: {
+    subagentAddress: (sessionId: string) => unknown
+  }
+}
+
 /** How often the client polls a started login, in ms. */
 const POLL_INTERVAL_MS = 1500
 /** How long the client keeps polling before giving up, in ms. */
@@ -297,6 +331,15 @@ function usageTooltip(window: UsageWindow, t: Translate): string {
   const lines = [t('nav'), `${t('usageUsed')}: ${used} / ${total}`]
   if (window.resetsAt !== undefined) lines.push(`${t('usageResets')}: ${window.resetsAt}`)
   return lines.join('\n')
+}
+
+/** Render a tooltip around an arbitrary React anchor accepted at runtime. */
+function tooltip(props: { label: string, side: 'top' | 'right', delayMs: number }, anchor: ReactElement): ReactElement {
+  return h(
+    Tooltip as unknown as (props: { label: string, side: 'top' | 'right', delayMs: number }, child: ReactElement) => ReactElement,
+    props,
+    anchor,
+  )
 }
 
 /**
@@ -388,7 +431,7 @@ function UsageIndicator({ rpc, t, wide }: {
   const color = usageColor(derived.usedPercent, dangerPct)
 
   if (wide) {
-    return h(Tooltip, { label, side: 'top', delayMs: 300 },
+    return tooltip({ label, side: 'top', delayMs: 300 },
       h('div', { style: s.usageWrap },
         h('div', { style: s.usageBar },
           h('div', { style: { ...s.usageFill, width: `${Math.min(pct, 100)}%`, background: color } }),
@@ -411,7 +454,7 @@ function UsageIndicator({ rpc, t, wide }: {
   const c = 2 * Math.PI * r
   const dash = (Math.min(pct, 100) / 100) * c
   const arcTransform = `rotate(-90 ${cx} ${cy})`
-  return h(Tooltip, { label, side: 'right', delayMs: 300 },
+  return tooltip({ label, side: 'right', delayMs: 300 },
     h('div', { style: s.usageRail },
       h('svg', { width: size, height: size, viewBox: `0 0 ${size} ${size}` },
         h('circle', {
@@ -860,21 +903,19 @@ interface ModelsReply {
 
 /** Register the CodeBuddy section once the `settings.section` slot is declared. */
 export function apply(ctx: Context): void {
-  ctx.effect(() => ctx.locale.register(NS, DICTS), 'dsh-llm-codebuddy: settings copy')
+  const client = ctx as ClientContext
+  client.effect(() => client.locale.register(NS, DICTS), 'dsh-llm-codebuddy: settings copy')
   injectPrefCss()
   injectModelSelectCss()
 
-  const t = ctx.locale.bind(NS)
-  const rpc = ctx.connection.rpc as ConnectionRpc
+  const t = client.locale.bind(NS)
+  const rpc = client.connection.rpc
   const injected = () => ({ rpc, t: t as Translate })
 
   // The language is resolved here and never reaches the host. Subscribers also
   // fire for dictionary registrations, so only a real change is worth a request.
-  ctx.effect(() => {
-    const locale = ctx.locale as {
-      getSnapshot?: () => { active?: string }
-      subscribe?: (fn: () => void) => () => void
-    }
+  client.effect(() => {
+    const locale = client.locale
     let last: string | undefined
     const report = (): void => {
       const active = locale.getSnapshot?.()?.active
@@ -883,10 +924,10 @@ export function apply(ctx: Context): void {
       void Promise.resolve(rpc.call(AUTH_CHANNEL, 'locale', active)).catch(() => {})
     }
     report()
-    return locale.subscribe?.(report)
+    return locale.subscribe?.(report) ?? (() => {})
   }, 'dsh-llm-codebuddy: language reporting')
 
-  ctx.slots.inject('settings.section', () => ctx.slots.register({
+  client.slots.inject('settings.section', () => client.slots.register({
     name: 'settings.section',
     id: 'codebuddy',
     order: 25,
@@ -899,7 +940,7 @@ export function apply(ctx: Context): void {
   // `sidebar.footer.action` entries above the settings seat, so this lands
   // directly above the Settings button. It renders nothing while signed out or
   // while the meter plane is unreachable, so the column geometry is unchanged.
-  ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
+  client.slots.inject('sidebar.footer.action', () => client.slots.register({
     name: 'sidebar.footer.action',
     id: 'codebuddy-usage',
     order: 10,
@@ -914,17 +955,10 @@ export function apply(ctx: Context): void {
   // seat and the /model popup read, so picking here updates both. Enriched
   // rows (tags, credit multipliers, tooltips) come from this plugin's own
   // RPC channel.
-  ctx.inject(['slots', 'modelDirectories', 'sessions', 'remote', 'remote.session'], (scope) => {
-    const models = scope.modelDirectories as {
-      directoryFor: (sessionId: string) => {
-        store: never
-        load: () => Promise<unknown>
-        select: (selection: { provider: string, model: string, reasoningEffort?: string }) => Promise<boolean>
-      }
-    }
-    const sessions = scope.sessions as {
-      subagentAddress: (sessionId: string) => unknown
-    }
+  client.inject(['slots', 'modelDirectories', 'sessions', 'remote', 'remote.session'], (injectedScope) => {
+    const scope = injectedScope as ClientContext
+    const models = scope.modelDirectories
+    const sessions = scope.sessions
     const enrichedRpc = {
       models: async () => {
         const result = await rpc.call<ModelsReply>(AUTH_CHANNEL, 'models', {})
@@ -935,7 +969,7 @@ export function apply(ctx: Context): void {
     // registers its dictionaries and this plugin declares it as a dependency,
     // so the binding exists by the time the seat renders. The bound `t` keeps
     // the shell's own wording (and any future key changes) for free.
-    const modelT = ctx.locale.bind('model') as ModelSelectT
+    const modelT = client.locale.bind('model') as ModelSelectT
     scope.slots.inject('conversation.input.model', () => scope.slots.register({
       name: 'conversation.input.model',
       // Shadowing a single slot requires a lower priority value than the
@@ -951,11 +985,11 @@ export function apply(ctx: Context): void {
             directory.select(selection).then(() => true, () => false),
         }
       },
-    }, (props: never) => CodeBuddyModelSelect({
+    }, (props: Omit<Parameters<typeof CodeBuddyModelSelect>[0], 'rpc' | 't' | 'zh'>) => CodeBuddyModelSelect({
       ...props,
       rpc: enrichedRpc,
       t: modelT,
-      zh: localeActiveZh(ctx),
+      zh: localeActiveZh(client),
     })))
   })
 }

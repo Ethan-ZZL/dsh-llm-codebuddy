@@ -14,7 +14,7 @@ import type { ReactElement } from 'react'
 import { createElement as h, Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { IconChevronDownOutline14, IconChevronRightOutline14, IconCheckOutline16, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
-import { CODEBUDDY_PROVIDER } from './constants.js'
+import { CODEBUDDY_PROVIDER } from '../constants.js'
 
 /**
  * Translate function over the official `model` locale namespace, registered
@@ -92,8 +92,10 @@ export interface DisplayTag {
  */
 function parseTag(tag: string): DisplayTag | undefined {
   const badge = /^badge:(.+):#([0-9a-f]{6})$/iu.exec(tag)
-  if (badge === null) return undefined
-  return { label: badge[1], color: `#${badge[2]}` }
+  const label = badge?.[1]
+  const color = badge?.[2]
+  if (label === undefined || color === undefined) return undefined
+  return { label, color: `#${color}` }
 }
 
 /**

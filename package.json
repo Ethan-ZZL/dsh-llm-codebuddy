@@ -56,8 +56,10 @@
   "scripts": {
     "build": "npm run build:host && npm run build:client && chmod +x lib/cli/login.js",
     "build:host": "tsc -p tsconfig.json",
-    "build:client": "node build-client.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build:client": "npm run typecheck:client && node build-client.mjs",
+    "typecheck": "npm run typecheck:host && npm run typecheck:client",
+    "typecheck:host": "tsc -p tsconfig.json --noEmit",
+    "typecheck:client": "tsc -p tsconfig.client.json --noEmit",
     "login": "node lib/cli/login.js"
   },
   "bin": {
