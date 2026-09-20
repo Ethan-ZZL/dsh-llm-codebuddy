@@ -23,9 +23,15 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { CodeBuddyModelSelect, MODEL_SELECT_CSS } from './model-select.js'
 import type { ModelDirectoryFace, ModelSelectT } from './model-select.js'
-
-/** The RPC channel the host auth service listens on (mirror of the host constant). */
-const AUTH_CHANNEL = '/codebuddy'
+import { CODEBUDDY_AUTH_CHANNEL as AUTH_CHANNEL } from '../protocol.js'
+import type {
+  CodeBuddyAuthStatus as AuthStatus,
+  CodeBuddyRpcEndpoint,
+  CodeBuddyRpcRequest,
+  CodeBuddyRpcResponse,
+  CodeBuddyUsageResult as UsageResult,
+  CodeBuddyUsageWindow as UsageWindow,
+} from '../protocol.js'
 
 /**
  * Local usage-indicator preferences: whether it shows, and an optional custom
@@ -163,56 +169,32 @@ if (typeof window !== 'undefined' && window.localStorage !== undefined) {
   })
 }
 
-/** The status shape the host `status` endpoint returns. */
-interface AuthStatus {
-  loggedIn: boolean
-  expired?: boolean
-  nickname?: string
-  uid?: string
-  uin?: string
-  enterpriseId?: string
-  enterpriseName?: string
-  enterpriseUserName?: string
-  departmentFullName?: string
-}
-
-/** The startLogin result shape. */
-interface LoginStart {
-  authUrl: string
-  state: string
-}
-
-/** The pollLogin result shape. */
-interface LoginPoll {
-  done: boolean
-  nickname?: string
-}
-
-/** One metering window the host `usage` endpoint reports. */
-interface UsageWindow {
-  name: string
-  used?: number
-  limit?: number
-  usedPercent?: number
-  resetsAt?: string
-}
-
-/** The usage result shape the host `usage` endpoint returns. */
-interface UsageResult {
-  loggedIn: boolean
-  windows: UsageWindow[]
-  primary?: UsageWindow
-}
-
 /** A successful RPC result. */
 interface RpcOk<T> { ok: true, value: T }
 /** A failed RPC result. */
 interface RpcErr { ok: false, error: { code: string, message: string, details: Record<string, unknown> } }
 type RpcResult<T> = RpcOk<T> | RpcErr
 
-/** The connection RPC face injected as `ctx.connection`. */
-interface ConnectionRpc {
+/** Generic connection transport injected as `ctx.connection.rpc`. */
+interface TransportRpc {
   call: <T>(channel: string, endpoint: string, payload?: unknown, signal?: AbortSignal) => Promise<RpcResult<T>>
+}
+
+/** Typed view over the transport for this plugin's endpoint map. */
+interface CodeBuddyRpc {
+  call: <K extends CodeBuddyRpcEndpoint>(
+    endpoint: K,
+    payload: CodeBuddyRpcRequest<K>,
+    signal?: AbortSignal,
+  ) => Promise<RpcResult<CodeBuddyRpcResponse<K>>>
+}
+
+/** Bind the shared CodeBuddy endpoint map to the generic connection transport. */
+function bindCodeBuddyRpc(rpc: TransportRpc): CodeBuddyRpc {
+  return {
+    call: <K extends CodeBuddyRpcEndpoint>(endpoint: K, payload: CodeBuddyRpcRequest<K>, signal?: AbortSignal) =>
+      rpc.call<CodeBuddyRpcResponse<K>>(AUTH_CHANNEL, endpoint, payload, signal),
+  }
 }
 
 /** Minimal locale service contract consumed by the browser plugin. */
@@ -235,7 +217,7 @@ interface ClientSlotsFace {
 /** Browser services dynamically injected by the DSH client runtime. */
 type ClientContext = Context & {
   locale: ClientLocaleFace
-  connection: { rpc: ConnectionRpc }
+  connection: { rpc: TransportRpc }
   slots: ClientSlotsFace
   modelDirectories: {
     directoryFor: (sessionId: string) => {
@@ -346,7 +328,7 @@ function usageTooltip(window: UsageWindow, t: Translate): string {
  * @param wide - whether the sidebar renders wide content.
  */
 function UsageIndicator({ rpc, t, wide }: {
-  rpc: ConnectionRpc
+  rpc: CodeBuddyRpc
   t: Translate
   wide: boolean
 }): ReactElement | null {
@@ -367,7 +349,7 @@ function UsageIndicator({ rpc, t, wide }: {
   // Re-read usage immediately when a sign-in or sign-out completes, rather
   // than waiting for the next 60s polling tick.
   useEffect(() => subscribeLoginChange(() => {
-    void rpc.call<UsageResult>(AUTH_CHANNEL, 'usage', {}).then((result) => {
+    void rpc.call('usage', {}).then((result) => {
       if (result.ok && result.value.loggedIn) setUsage(result.value)
       else setUsage(undefined)
     }).catch(() => { /* a re-read failure just keeps the last snapshot */ })
@@ -378,7 +360,7 @@ function UsageIndicator({ rpc, t, wide }: {
     let stopped = false
     const read = async (): Promise<void> => {
       if (stopped) return
-      const result = await rpc.call<UsageResult>(AUTH_CHANNEL, 'usage', {})
+      const result = await rpc.call('usage', {})
       if (stopped) return
       if (result.ok && result.value.loggedIn) {
         setUsage(result.value)
@@ -485,7 +467,7 @@ const USAGE_REFRESH_MS = 60_000
  * visibility, so no close affordance is needed here.
  */
 function CodeBuddySection({ rpc, t }: {
-  rpc: ConnectionRpc
+  rpc: CodeBuddyRpc
   t: Translate
 }): ReactElement {
   const [phase, setPhase] = useState<Phase>('loading')
@@ -514,7 +496,7 @@ function CodeBuddySection({ rpc, t }: {
   }), [])
 
   const refresh = useCallback(async () => {
-    const result = await rpc.call<AuthStatus>(AUTH_CHANNEL, 'status', {})
+    const result = await rpc.call('status', {})
     if (result.ok) {
       setStatus(result.value)
       setPhase('idle')
@@ -536,7 +518,7 @@ function CodeBuddySection({ rpc, t }: {
     let stopped = false
     const tick = async (): Promise<void> => {
       if (stopped) return
-      const result = await rpc.call<LoginPoll>(AUTH_CHANNEL, 'pollLogin', { state: loginState })
+      const result = await rpc.call('pollLogin', { state: loginState })
       if (stopped) return
       if (result.ok && result.value.done) {
         setLoginState(undefined)
@@ -558,7 +540,7 @@ function CodeBuddySection({ rpc, t }: {
 
   const startLogin = useCallback(async () => {
     setError(undefined)
-    const result = await rpc.call<LoginStart>(AUTH_CHANNEL, 'startLogin', {})
+    const result = await rpc.call('startLogin', {})
     if (!result.ok) {
       setError(describeError(result))
       setPhase('error')
@@ -570,7 +552,7 @@ function CodeBuddySection({ rpc, t }: {
   }, [rpc])
 
   const logout = useCallback(async () => {
-    const result = await rpc.call<void>(AUTH_CHANNEL, 'logout', {})
+    const result = await rpc.call('logout', {})
     if (result.ok) {
       setStatus({ loggedIn: false })
       emitLoginChange()
@@ -876,20 +858,6 @@ function injectPrefCss(): void {
   document.head.appendChild(tag)
 }
 
-/** The CodeBuddy model-catalog reply (mirror of the host projection shape). */
-interface ModelsReply {
-  loggedIn: boolean
-  models: {
-    id: string
-    name: string
-    credits?: string
-    tags?: string[]
-    descriptionZh?: string
-    descriptionEn?: string
-    promotion?: { color: string, label: string, textZh?: string, textEn?: string, discountedRate?: string }
-  }[]
-}
-
 /** Register the CodeBuddy section once the `settings.section` slot is declared. */
 export function apply(ctx: Context): void {
   const client = ctx as ClientContext
@@ -898,7 +866,7 @@ export function apply(ctx: Context): void {
   injectModelSelectCss()
 
   const t = client.locale.bind(NS)
-  const rpc = client.connection.rpc
+  const rpc = bindCodeBuddyRpc(client.connection.rpc)
   const injected = () => ({ rpc, t: t as Translate })
 
   // The language is resolved here and never reaches the host. Subscribers also
@@ -910,7 +878,7 @@ export function apply(ctx: Context): void {
       const active = locale.getSnapshot?.()?.active
       if (active === undefined || active === last) return
       last = active
-      void Promise.resolve(rpc.call(AUTH_CHANNEL, 'locale', active)).catch(() => {})
+      void Promise.resolve(rpc.call('locale', active)).catch(() => {})
     }
     report()
     return locale.subscribe?.(report) ?? (() => {})
@@ -950,7 +918,7 @@ export function apply(ctx: Context): void {
     const sessions = scope.sessions
     const enrichedRpc = {
       models: async () => {
-        const result = await rpc.call<ModelsReply>(AUTH_CHANNEL, 'models', {})
+        const result = await rpc.call('models', {})
         return result.ok && result.value.loggedIn ? result.value.models : undefined
       },
     }

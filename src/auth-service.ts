@@ -26,120 +26,29 @@ import type { CodeBuddyStorage } from './storage.js'
 import { hasDisclosedCapacity, isPromotionActive } from './types.js'
 import type { CodeBuddyModel, CodeBuddyModelPromotion, CodeBuddyPromotionDiscount } from './types.js'
 import type { UsageSnapshot, UsageWindow } from './usage.js'
+import { CODEBUDDY_AUTH_CHANNEL } from './protocol.js'
+import type {
+  CodeBuddyAuthStatus,
+  CodeBuddyLoginPoll,
+  CodeBuddyLoginStart,
+  CodeBuddyModelEntry,
+  CodeBuddyModelsResult,
+  CodeBuddyPromotionView,
+  CodeBuddyUsageResult,
+  CodeBuddyUsageWindow,
+} from './protocol.js'
 
-/** The RPC channel the client calls the auth service on. */
-export const CODEBUDDY_AUTH_CHANNEL = '/codebuddy'
-
-/** The shape `status` returns to the client. */
-export interface CodeBuddyAuthStatus {
-  /** Whether a usable credential is stored. */
-  loggedIn: boolean
-  /** Set when a credential exists but can no longer authenticate. */
-  expired?: boolean
-  /** Signed-in display name, when available. */
-  nickname?: string
-  /** Account uid, when available. */
-  uid?: string
-  /** Tencent user identity number (e.g. QQ openid), when the account discloses one. */
-  uin?: string
-  /** Enterprise/organization id, when the account is an enterprise tenant. */
-  enterpriseId?: string
-  /** Enterprise display name, when the account is an enterprise tenant. */
-  enterpriseName?: string
-  /** Enterprise user name (the account's name within the tenant). */
-  enterpriseUserName?: string
-  /** Department full name, when the enterprise account discloses one. */
-  departmentFullName?: string
-}
-
-/** The shape `startLogin` returns to the client. */
-export interface CodeBuddyLoginStart {
-  /** URL the user must open to sign in. */
-  authUrl: string
-  /** Handshake id; the client passes it back to `pollLogin`. */
-  state: string
-}
-
-/** The shape `pollLogin` returns to the client. */
-export interface CodeBuddyLoginPoll {
-  /** Whether the handshake has completed and the credential was persisted. */
-  done: boolean
-  /** Signed-in display name, when the login just completed. */
-  nickname?: string
-}
-
-/**
- * One metering window shipped to the client, a plain-data projection of
- * {@link UsageWindow} with optional fields made safe to omit.
- */
-export interface CodeBuddyUsageWindow {
-  name: string
-  used?: number
-  limit?: number
-  usedPercent?: number
-  resetsAt?: string
-}
-
-/** The shape `usage` returns to the client. */
-export interface CodeBuddyUsageResult {
-  /** Whether a usable credential is stored; false means no usage to show. */
-  loggedIn: boolean
-  /** One entry per metering window; empty when the plane answered nothing usable. */
-  windows: CodeBuddyUsageWindow[]
-  /**
-   * The first window, surfaced for a single-bar affordance; `undefined` when
-   * the plane reported no windows.
-   */
-  primary?: CodeBuddyUsageWindow
-}
-
-/**
- * One catalog entry shipped to the client for the model selector, a plain-data
- * projection of {@link CodeBuddyModel} with optional fields made safe to omit.
- * The selector reads these richer facts through this plugin's own channel.
- */
-export interface CodeBuddyModelEntry {
-  id: string
-  name: string
-  /** Credit multiplier label ("x0.79"), when disclosed. */
-  credits?: string
-  /** Opaque tags and `badge:<label>:#<RRGGBB>` colored badges, when disclosed. */
-  tags?: string[]
-  /** Chinese description, when disclosed. */
-  descriptionZh?: string
-  /** English description, when disclosed. */
-  descriptionEn?: string
-  /**
-   * The currently active promotion on this model, when one runs: a colored
-   * badge for the row plus locale hover text for the tooltip.
-   */
-  promotion?: CodeBuddyPromotionView
-}
-
-/**
- * The client-facing shape of one active model promotion: only the display
- * facts (badge color/label, locale hover texts, discounted rate); scheduling
- * and priority are resolved host-side.
- */
-export interface CodeBuddyPromotionView {
-  /** Hex color the badge pill renders in. */
-  color: string
-  label: string
-  /** Chinese hover text, when disclosed. */
-  textZh?: string
-  /** English hover text, when disclosed. */
-  textEn?: string
-  /** Discounted rate replacing the model's `credits`. */
-  discountedRate?: string
-}
-
-/** The shape `models` returns to the client. */
-export interface CodeBuddyModelsResult {
-  /** Whether a usable credential is stored; false means no catalog to show. */
-  loggedIn: boolean
-  /** Catalog entries in service order; chat-capable models only. */
-  models: CodeBuddyModelEntry[]
-}
+export { CODEBUDDY_AUTH_CHANNEL } from './protocol.js'
+export type {
+  CodeBuddyAuthStatus,
+  CodeBuddyLoginPoll,
+  CodeBuddyLoginStart,
+  CodeBuddyModelEntry,
+  CodeBuddyModelsResult,
+  CodeBuddyPromotionView,
+  CodeBuddyUsageResult,
+  CodeBuddyUsageWindow,
+} from './protocol.js'
 
 /** One in-flight browser-login handshake, keyed by its own state. */
 interface PendingLogin {

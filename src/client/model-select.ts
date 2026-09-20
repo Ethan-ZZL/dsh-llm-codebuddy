@@ -15,6 +15,7 @@ import { createElement as h, Fragment, useCallback, useEffect, useMemo, useRef, 
 import { IconChevronDownOutline14, IconChevronRightOutline14, IconCheckOutline16, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { CODEBUDDY_PROVIDER } from '../constants.js'
+import type { CodeBuddyModelEntry } from '../protocol.js'
 
 /**
  * Translate function over the official `model` locale namespace, registered
@@ -27,24 +28,8 @@ export interface ModelSelectT {
   (key: 'menu.model' | 'menu.effort' | 'effort.providerDefault' | 'trigger.loading' | 'trigger.fallback' | 'trigger.selectAria' | 'trigger.aria' | 'trigger.ariaEffort' | 'menu.aria' | 'empty.models' | 'empty.efforts' | 'status.loading' | 'error.action' | 'action.reload' | 'warning.groupLoad', params?: Record<string, string>): string
 }
 
-/** One enriched model row: the harness catalog entry plus CodeBuddy display facts. */
-export interface EnrichedModel {
-  id: string
-  name: string
-  /** Credit multiplier label ("x0.79") from the CodeBuddy catalog. */
-  credits?: string
-  /** Opaque tags and `badge:<label>:#<RRGGBB>` colored badges, from the CodeBuddy catalog. */
-  tags?: string[]
-  /** Chinese description, when CodeBuddy disclosed one. */
-  descriptionZh?: string
-  /** English description, when CodeBuddy disclosed one. */
-  descriptionEn?: string
-  /**
-   * The currently active promotion on this model, when one runs: a colored
-   * badge pill for the row plus locale hover text for the tooltip.
-   */
-  promotion?: { color: string, label: string, textZh?: string, textEn?: string, discountedRate?: string }
-}
+/** One enriched model row: the shared Host/browser catalog projection. */
+export type EnrichedModel = CodeBuddyModelEntry
 
 /** The enriched catalog the seat resolves before first render of a group. */
 export interface ModelDirectoryFace {
