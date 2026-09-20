@@ -54,5 +54,11 @@ export const LOGIN_TIMEOUT_MS = 10 * 60 * 1000
 /** Poll interval while waiting for the browser login to complete, in ms. */
 export const LOGIN_POLL_INTERVAL_MS = 1_000
 
-/** Service code meaning "the browser login has not completed yet". */
-export const AUTH_PENDING_CODE = 11217
+/** Browser login not finished. */
+export const CODE_AUTH_PENDING = 11217
+
+/** No quota available. */
+export const CODE_NO_QUOTA = 14018
+
+/** No team quota available. */
+export const CODE_NO_TEAM_QUOTA = 14019

@@ -302,6 +302,17 @@ export interface WireError {
     message?: string
     type?: string
     code?: string
+    /**
+     * CodeBuddy's own nested envelope. A refused chat request answers
+     * `{error:{data:{code,msg,requestId}}}` rather than the flat OpenAI shape,
+     * so the code that identifies the condition lives in here — reading only
+     * the flat fields finds nothing and the envelope looks undescribed.
+     */
+    data?: {
+      code?: number
+      msg?: string
+      requestId?: string
+    }
   }
 }
 

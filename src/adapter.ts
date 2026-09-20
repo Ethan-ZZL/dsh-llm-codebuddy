@@ -39,6 +39,8 @@ import {
   CODEBUDDY_IDE_USER_AGENT,
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_TOKENS,
+  CODE_NO_QUOTA,
+  CODE_NO_TEAM_QUOTA,
 } from './constants.js'
 import { NotLoggedInError, SessionUnavailableError } from './session.js'
 import type { CodeBuddySession } from './session.js'
@@ -114,6 +116,8 @@ function firstText(values: readonly unknown[]): string | undefined {
 
 /** What one failure envelope is worth: a sentence to report, and the text a classifier reads. */
 interface WireFailure {
+  /** The service's own numeric error code, when one was carried. */
+  code?: number
   /** The curated sentence in the reporting language, then the service's own fields. */
   message?: string
   /**
@@ -149,6 +153,7 @@ function readWireFailure(body: WireError, language: string | undefined): WireFai
   const provider = body.extError
   const display = body.displayMsg
   const compatible = body.error
+  const code = failureCode(body)
   // The reported locale id names the key directly; English stands as the
   // service's own default.
   const curated = firstText([
@@ -160,6 +165,10 @@ function readWireFailure(body: WireError, language: string | undefined): WireFai
     body.msg,
     provider?.message,
     compatible?.message,
+    // The nested envelope is last: it is CodeBuddy's own shape and the only
+    // place a refused chat request states its reason, but a real OpenAI
+    // `{error:{message}}` has no `data` and must keep using the flat field.
+    compatible?.data?.msg,
   ])
   const detail = [
     body.code === undefined ? undefined : String(body.code),
@@ -174,19 +183,44 @@ function readWireFailure(body: WireError, language: string | undefined): WireFai
     compatible?.code,
     compatible?.type,
     compatible?.message,
+    compatible?.data?.code === undefined ? undefined : String(compatible.data.code),
+    compatible?.data?.msg,
   ].filter(value => value !== undefined && value.length > 0).join(' ')
-  return { ...message === undefined ? {} : { message }, detail }
+  return {
+    ...message === undefined ? {} : { message },
+    detail,
+    ...code === undefined ? {} : { code },
+  }
+}
+
+/**
+ * The service's own numeric error code from one failure envelope.
+ *
+ * Read from every field that carries one, nested envelope included: a refused
+ * chat request answers `{error:{data:{code}}}`, so the flat `code` is absent
+ * there. The first finite number wins, and an unreadable one is skipped rather
+ * than read as `NaN`.
+ * @param body - the parsed error body.
+ * @returns the code, when the envelope carried a usable one.
+ */
+function failureCode(body: WireError): number | undefined {
+  for (const value of [body.code, body.error?.data?.code]) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+  }
+  return undefined
 }
 
 /**
  * Map an HTTP status onto a stable harness error code.
  * @param status - the non-2xx status.
  * @param detail - every error wording the reply carried, when readable.
+ * @param code - the service's own numeric error code, when the body carried one.
  * @returns the normalized code.
  */
-export function httpErrorCode(status: number, detail?: string): string {
+export function httpErrorCode(status: number, detail?: string, code?: number): string {
   if (status === 401 || status === 403) return 'AUTH'
   const text = detail ?? ''
+  if (code === CODE_NO_QUOTA || code === CODE_NO_TEAM_QUOTA) return QUOTA_EXCEEDED_CODE
   if (isQuotaExceededError(text)) return QUOTA_EXCEEDED_CODE
   if (status === 429) return 'RATE_LIMIT'
   if (status === 400) {
@@ -487,7 +521,7 @@ export class CodeBuddyAdapter extends LlmAdapter {
       }
       const delay = providerRetryAfterMs(response.headers.get('retry-after'))
       const id = requestId(response.headers)
-      throw new LlmError(message, httpErrorCode(response.status, failure.detail), {
+      throw new LlmError(message, httpErrorCode(response.status, failure.detail, failure.code), {
         status: response.status,
         ...delay === undefined ? {} : { providerRetryAfterMs: delay },
         ...id === undefined ? {} : { requestId: id },

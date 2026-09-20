@@ -12,7 +12,7 @@
  */
 
 import {
-  AUTH_PENDING_CODE,
+  CODE_AUTH_PENDING,
   CODEBUDDY_ENDPOINT,
   CODEBUDDY_IDE_USER_AGENT,
   LOGIN_POLL_INTERVAL_MS,
@@ -86,7 +86,7 @@ export async function requestAuthState(signal?: AbortSignal): Promise<AuthState>
 /**
  * Poll until the user finishes signing in in the browser.
  *
- * The service reports "not finished yet" as code {@link AUTH_PENDING_CODE},
+ * The service reports "not finished yet" as code {@link CODE_AUTH_PENDING},
  * which is the one code that continues the loop; anything else is a decided
  * outcome and ends it. A transport error also ends it, because a handshake
  * whose state may already be spent must not be retried silently.
@@ -113,7 +113,7 @@ export async function pollAuthToken(state: string, signal?: AbortSignal): Promis
     }
     if (!response.ok) continue
     const body = await response.json() as AuthTokenResponse
-    if (body.code === AUTH_PENDING_CODE) continue
+    if (body.code === CODE_AUTH_PENDING) continue
     if (body.code !== 0) return undefined
     return body.data
   }
