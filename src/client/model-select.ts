@@ -10,10 +10,11 @@
  * @module dsh-llm-codebuddy/model-select
  */
 
-import type { ReactElement } from 'react'
-import { createElement as h, Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import type { Key, ReactElement } from 'react'
+import { createElement as h, Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { IconChevronDownOutline14, IconChevronRightOutline14, IconCheckOutline16, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
+import type { ModelSelectInjected } from '@deepseek-ai/dsh-client-ui-model-selection/client'
+import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { CODEBUDDY_PROVIDER } from '../constants.js'
 import type { CodeBuddyModelEntry } from '../protocol.js'
 
@@ -24,43 +25,13 @@ import type { CodeBuddyModelEntry } from '../protocol.js'
  * Copy lives with the shell: the seat stays in sync with the shell's own
  * wording automatically.
  */
-export interface ModelSelectT {
-  (key: 'menu.model' | 'menu.effort' | 'effort.providerDefault' | 'trigger.loading' | 'trigger.fallback' | 'trigger.selectAria' | 'trigger.aria' | 'trigger.ariaEffort' | 'menu.aria' | 'empty.models' | 'empty.efforts' | 'status.loading' | 'error.action' | 'action.reload' | 'warning.groupLoad', params?: Record<string, string>): string
-}
+export type ModelSelectT = TranslateNS<'model'>
 
 /** One enriched model row: the shared Host/browser catalog projection. */
 export type EnrichedModel = CodeBuddyModelEntry
 
-/** The enriched catalog the seat resolves before first render of a group. */
-export interface ModelDirectoryFace {
-  /** The session's shared directory store (same instance the /model popup reads). */
-  directory: SnapshotStore<DirectoryState>
-  /** Ensure the shared advisory catalog is loaded (errors land on the store). */
-  load: () => void
-  /** Select a complete provider/model/reasoning selection. */
-  select: (selection: { provider: string, model: string, reasoningEffort?: string }) => Promise<boolean>
-  /** Whether this session supports model inspection and selection. */
-  available: boolean
-}
-
-/** The subset of the ModelDirectory store snapshot the seat renders from. */
-export interface DirectoryState {
-  current: { provider: string, model: string, reasoningEffort?: string } | null
-  routable: boolean | null
-  groups: readonly {
-    id: string
-    name: string
-    models: readonly {
-      id: string
-      name: string
-      description?: string
-      reasoning?: { efforts: readonly { id: string, name: string }[], defaultEffort?: string }
-    }[]
-  }[]
-  failures: readonly { id: string, name: string, message: string }[]
-  status: 'idle' | 'loading' | 'selecting' | 'ready' | 'error'
-  error: string | null
-}
+/** Official shared model-directory face injected into the composer seat. */
+export type ModelDirectoryFace = ModelSelectInjected
 
 /** One parsed display tag: label plus its color. */
 export interface DisplayTag {
@@ -176,21 +147,15 @@ export interface EnrichedCatalogRpc {
 }
 
 /**
- * Tooltip's runtime accepts rich React labels although the installed declaration
- * only exposes text labels. Keep that one compatibility cast isolated while
- * preserving the component's native `children` anchor contract.
+ * Keep Tooltip's native anchor contract while adapting its text-only label type
+ * to the richer React content that the runtime already renders as children.
  */
 type NativeTooltipProps = Parameters<typeof Tooltip>[0]
-type RichTooltipProps = Omit<NativeTooltipProps, 'label' | 'children'> & { label: ReactElement }
+type RichTooltipProps = Omit<NativeTooltipProps, 'label' | 'children'> & { key?: Key, label: ReactElement }
 const richTooltip = ({ label, ...props }: RichTooltipProps, children: NativeTooltipProps['children']): ReactElement =>
   h(Tooltip, { ...props, label: label as unknown as NativeTooltipProps['label'], children })
 
-/**
- * The hover bubble content for one model row: name + id on the first line
- * (id dimmer, after the name), the badge tags and promotion badge on the
- * second, the locale description, and the promotion hover text below a
- * separator.
- */
+/** Rich hover content for one model row. */
 function modelTooltipContent(model: { id: string, name: string, description?: string }, enriched: EnrichedModel | undefined, zh: boolean): ReactElement {
   const badges = (enriched?.tags ?? []).map(parseTag).filter((tag): tag is DisplayTag => tag !== undefined)
   const promotion = enriched?.promotion
@@ -206,11 +171,14 @@ function modelTooltipContent(model: { id: string, name: string, description?: st
       h('span', { className: 'cbms-tipId' }, model.id),
     ),
     badges.length > 0 || promotion !== undefined ? h('div', { className: 'cbms-tipTags' },
-      badges.map((badge, i) => h('span', {
-        key: i, className: 'cbms-tag', style: { color: badge.color, borderColor: badge.color },
+      badges.map((badge) => h('span', {
+        key: badge.label,
+        className: 'cbms-tag',
+        style: { color: badge.color, borderColor: badge.color },
       }, badge.label)),
       promotion !== undefined ? h('span', {
-        key: 'promotion', className: 'cbms-tag',
+        key: 'promotion',
+        className: 'cbms-tag',
         style: { color: promotion.color, borderColor: promotion.color },
       }, promotion.label) : null,
     ) : null,
@@ -286,7 +254,7 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
   useEffect(() => {
     if (!open) return
     const closeOutside = (event: MouseEvent): void => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+      if (!(event.target instanceof Node) || !rootRef.current?.contains(event.target)) setOpen(false)
     }
     document.addEventListener('mousedown', closeOutside)
     return () => { document.removeEventListener('mousedown', closeOutside) }
@@ -447,38 +415,40 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
               const rate = rowRate(creditsOf(extra), extra?.promotion)
               const badges = (extra?.tags ?? []).map(parseTag).filter((tag): tag is DisplayTag => tag !== undefined)
               const promotion = extra?.promotion
-              return richTooltip({ label: modelTooltipContent(model, extra, zh), side: 'top', delayMs: 300 },
-                h('button', {
-                  key: model.id,
-                  ref: itemRef(),
-                  type: 'button',
-                  role: 'menuitemradio',
-                  'aria-checked': selected,
-                  className: `cbms-option${selected ? ' cbms-selected' : ''}`,
-                  disabled: busy,
-                  onClick: () => { choose({ provider: group.id, model: model.id }) },
-                },
-                  h('span', { className: 'cbms-optionCopy' },
-                    h('span', { className: 'cbms-modelName' }, model.name),
-                    badges.map((badge) => h('span', {
-                      key: badge.label, className: 'cbms-tag',
-                      style: { color: badge.color, borderColor: badge.color },
-                    }, badge.label)),
-                    // The promotion badge rides after the catalog badges.
-                    promotion !== undefined ? h('span', {
-                      key: 'promotion', className: 'cbms-tag',
-                      style: { color: promotion.color, borderColor: promotion.color },
-                    }, promotion.label) : null,
-                  ),
-                  // The selection check comes before the rate, so an
-                  // unselected row's multiplier sits flush right.
-                  h('span', { className: 'cbms-check' }, selected ? h(IconCheckOutline16, null) : null),
-                  rate !== undefined ? h('span', {
-                    className: `cbms-credits${rate.promo ? ' cbms-creditsPromo' : rate.free ? ' cbms-creditsFree' : ''}`,
-                    ...rate.tint === undefined ? {} : { style: { color: rate.tint } },
-                  }, rate.label) : null,
+              return richTooltip({
+                key: model.id,
+                label: modelTooltipContent(model, extra, zh),
+                side: 'top',
+                delayMs: 300,
+              }, h('button', {
+                ref: itemRef(),
+                type: 'button',
+                role: 'menuitemradio',
+                'aria-checked': selected,
+                className: `cbms-option${selected ? ' cbms-selected' : ''}`,
+                disabled: busy,
+                onClick: () => { choose({ provider: group.id, model: model.id }) },
+              },
+                h('span', { className: 'cbms-optionCopy' },
+                  h('span', { className: 'cbms-modelName' }, model.name),
+                  badges.map((badge) => h('span', {
+                    key: badge.label, className: 'cbms-tag',
+                    style: { color: badge.color, borderColor: badge.color },
+                  }, badge.label)),
+                  // The promotion badge rides after the catalog badges.
+                  promotion !== undefined ? h('span', {
+                    key: 'promotion', className: 'cbms-tag',
+                    style: { color: promotion.color, borderColor: promotion.color },
+                  }, promotion.label) : null,
                 ),
-              )
+                // The selection check comes before the rate, so an
+                // unselected row's multiplier sits flush right.
+                h('span', { className: 'cbms-check' }, selected ? h(IconCheckOutline16, null) : null),
+                rate !== undefined ? h('span', {
+                  className: `cbms-credits${rate.promo ? ' cbms-creditsPromo' : rate.free ? ' cbms-creditsFree' : ''}`,
+                  ...rate.tint === undefined ? {} : { style: { color: rate.tint } },
+                }, rate.label) : null,
+              ))
             }),
           )),
         ),

@@ -13,6 +13,16 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type { ClientConnectionRpc, ConnectionHandle, ConnectionRpcResult } from '@deepseek-ai/dsh-client-connection/client'
+import type {} from '@deepseek-ai/dsh-client-locale/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
+import type {} from '@deepseek-ai/dsh-client-ui-session/client'
+import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type {} from '@deepseek-ai/dsh-client-ui-model-selection/client'
+import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
+import type {} from '@deepseek-ai/dsh-api-session-controller/client'
 import { useState, useEffect, useCallback, createElement as h, Fragment, type ChangeEvent, type HTMLAttributes, type ReactElement } from 'react'
 import {
   Button,
@@ -22,7 +32,7 @@ import {
   IconChevronDownOutline14,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { CodeBuddyModelSelect, MODEL_SELECT_CSS } from './model-select.js'
-import type { ModelDirectoryFace, ModelSelectT } from './model-select.js'
+import type { ModelSelectT } from './model-select.js'
 import { CODEBUDDY_AUTH_CHANNEL as AUTH_CHANNEL } from '../protocol.js'
 import type {
   CodeBuddyAuthStatus as AuthStatus,
@@ -32,6 +42,13 @@ import type {
   CodeBuddyUsageResult as UsageResult,
   CodeBuddyUsageWindow as UsageWindow,
 } from '../protocol.js'
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /** Browser connection service; its package omits this augmentation to avoid colliding with the Host face. */
+    connection: ConnectionHandle
+  }
+}
 
 /**
  * Local usage-indicator preferences: whether it shows, and an optional custom
@@ -169,16 +186,8 @@ if (typeof window !== 'undefined' && window.localStorage !== undefined) {
   })
 }
 
-/** A successful RPC result. */
-interface RpcOk<T> { ok: true, value: T }
-/** A failed RPC result. */
-interface RpcErr { ok: false, error: { code: string, message: string, details: Record<string, unknown> } }
-type RpcResult<T> = RpcOk<T> | RpcErr
-
-/** Generic connection transport injected as `ctx.connection.rpc`. */
-interface TransportRpc {
-  call: <T>(channel: string, endpoint: string, payload?: unknown, signal?: AbortSignal) => Promise<RpcResult<T>>
-}
+/** Failed RPC result used by the settings error presenter. */
+type RpcErr = Extract<ConnectionRpcResult<unknown>, { ok: false }>
 
 /** Typed view over the transport for this plugin's endpoint map. */
 interface CodeBuddyRpc {
@@ -186,48 +195,17 @@ interface CodeBuddyRpc {
     endpoint: K,
     payload: CodeBuddyRpcRequest<K>,
     signal?: AbortSignal,
-  ) => Promise<RpcResult<CodeBuddyRpcResponse<K>>>
+  ) => Promise<ConnectionRpcResult<CodeBuddyRpcResponse<K>>>
 }
 
-/** Bind the shared CodeBuddy endpoint map to the generic connection transport. */
-function bindCodeBuddyRpc(rpc: TransportRpc): CodeBuddyRpc {
+/**
+ * Bind the shared CodeBuddy endpoint map to Connection's intentionally untyped
+ * transport boundary. All callers below are now checked against that map.
+ */
+function bindCodeBuddyRpc(rpc: ClientConnectionRpc): CodeBuddyRpc {
   return {
     call: <K extends CodeBuddyRpcEndpoint>(endpoint: K, payload: CodeBuddyRpcRequest<K>, signal?: AbortSignal) =>
-      rpc.call<CodeBuddyRpcResponse<K>>(AUTH_CHANNEL, endpoint, payload, signal),
-  }
-}
-
-/** Minimal locale service contract consumed by the browser plugin. */
-interface ClientLocaleFace {
-  register: (namespace: string, dictionaries: Record<string, Record<string, string>>) => () => void
-  bind: (namespace: string) => Translate
-  getSnapshot?: () => { active: string }
-  subscribe?: (listener: () => void) => () => void
-}
-
-/** Minimal slot registry contract consumed by the browser plugin. */
-interface ClientSlotsFace {
-  inject: (name: string, callback: () => () => void) => () => void
-  register: <Props>(
-    config: Record<string, unknown>,
-    component: (props: Props) => ReactElement | null,
-  ) => () => void
-}
-
-/** Browser services dynamically injected by the DSH client runtime. */
-type ClientContext = Context & {
-  locale: ClientLocaleFace
-  connection: { rpc: TransportRpc }
-  slots: ClientSlotsFace
-  modelDirectories: {
-    directoryFor: (sessionId: string) => {
-      store: ModelDirectoryFace['directory']
-      load: () => Promise<unknown>
-      select: ModelDirectoryFace['select']
-    }
-  }
-  sessions: {
-    subagentAddress: (sessionId: string) => unknown
+      rpc.call(AUTH_CHANNEL, endpoint, payload, signal) as Promise<ConnectionRpcResult<CodeBuddyRpcResponse<K>>>,
   }
 }
 
@@ -476,23 +454,20 @@ function CodeBuddySection({ rpc, t }: {
   const [loginState, setLoginState] = useState<string | undefined>(undefined)
   const [showUsage, setShowUsage] = useState<boolean>(getUsagePref())
   const [menuOpen, setMenuOpen] = useState<boolean>(false)
-  const [customLimit, setCustomLimitState] = useState<number | undefined>(getCustomLimit())
-  // The text field mirrors the persisted value; it holds the user's in-progress
-  // typing (including the empty string for "clear") and commits on blur/change.
-  const [limitText, setLimitText] = useState<string>(customLimit === undefined ? '' : String(customLimit))
-  const [dangerPct, setDangerPctState] = useState<number>(getDangerPct())
-  const [dangerText, setDangerText] = useState<string>(String(getDangerPct()))
+  // The text fields mirror persisted values while retaining in-progress input.
+  const [limitText, setLimitText] = useState<string>(() => {
+    const limit = getCustomLimit()
+    return limit === undefined ? '' : String(limit)
+  })
+  const [dangerText, setDangerText] = useState<string>(() => String(getDangerPct()))
 
   // Keep the controls in sync with preference flips from the sidebar or other
   // tabs; the sidebar indicator reads the same store, so the two stay aligned.
   useEffect(() => subscribeUsagePref(() => {
     setShowUsage(getUsagePref())
     const next = getCustomLimit()
-    setCustomLimitState(next)
     setLimitText(next === undefined ? '' : String(next))
-    const danger = getDangerPct()
-    setDangerPctState(danger)
-    setDangerText(String(danger))
+    setDangerText(String(getDangerPct()))
   }), [])
 
   const refresh = useCallback(async () => {
@@ -804,10 +779,19 @@ const DICTS = {
     'usageUsed': 'Usage',
     'usageResets': 'Resets at',
   },
+} as const
+
+type CodeBuddyLocaleKey = keyof typeof DICTS.en
+
+declare module '@deepseek-ai/dsh-client-ui-slots' {
+  interface LocaleNamespaceMap {
+    /** Copy owned by the CodeBuddy settings page and sidebar usage indicator. */
+    'settings.codebuddy': CodeBuddyLocaleKey
+  }
 }
 
 /** A bound translate function, passed to the section through `inject`. */
-type Translate = (key: string, params?: Record<string, string>) => string
+type Translate = TranslateNS<typeof NS>
 
 /**
  * Module-level service declarations. Beyond this plugin's own seats, the
@@ -860,19 +844,18 @@ function injectPrefCss(): void {
 
 /** Register the CodeBuddy section once the `settings.section` slot is declared. */
 export function apply(ctx: Context): void {
-  const client = ctx as ClientContext
-  client.effect(() => client.locale.register(NS, DICTS), 'dsh-llm-codebuddy: settings copy')
+  ctx.effect(() => ctx.locale.register(NS, DICTS), 'dsh-llm-codebuddy: settings copy')
   injectPrefCss()
   injectModelSelectCss()
 
-  const t = client.locale.bind(NS)
-  const rpc = bindCodeBuddyRpc(client.connection.rpc)
-  const injected = () => ({ rpc, t: t as Translate })
+  const t = ctx.locale.bind(NS)
+  const rpc = bindCodeBuddyRpc(ctx.connection.rpc)
+  const injected = () => ({ rpc, t })
 
   // The language is resolved here and never reaches the host. Subscribers also
   // fire for dictionary registrations, so only a real change is worth a request.
-  client.effect(() => {
-    const locale = client.locale
+  ctx.effect(() => {
+    const locale = ctx.locale
     let last: string | undefined
     const report = (): void => {
       const active = locale.getSnapshot?.()?.active
@@ -884,7 +867,7 @@ export function apply(ctx: Context): void {
     return locale.subscribe?.(report) ?? (() => {})
   }, 'dsh-llm-codebuddy: language reporting')
 
-  client.slots.inject('settings.section', () => client.slots.register({
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'codebuddy',
     order: 25,
@@ -897,7 +880,7 @@ export function apply(ctx: Context): void {
   // `sidebar.footer.action` entries above the settings seat, so this lands
   // directly above the Settings button. It renders nothing while signed out or
   // while the meter plane is unreachable, so the column geometry is unchanged.
-  client.slots.inject('sidebar.footer.action', () => client.slots.register({
+  ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
     name: 'sidebar.footer.action',
     id: 'codebuddy-usage',
     order: 10,
@@ -912,8 +895,7 @@ export function apply(ctx: Context): void {
   // seat and the /model popup read, so picking here updates both. Enriched
   // rows (tags, credit multipliers, tooltips) come from this plugin's own
   // RPC channel.
-  client.inject(['slots', 'modelDirectories', 'sessions', 'remote', 'remote.session'], (injectedScope) => {
-    const scope = injectedScope as ClientContext
+  ctx.inject(['slots', 'modelDirectories', 'sessions', 'remote', 'remote.session'], (scope) => {
     const models = scope.modelDirectories
     const sessions = scope.sessions
     const enrichedRpc = {
@@ -926,13 +908,13 @@ export function apply(ctx: Context): void {
     // registers its dictionaries and this plugin declares it as a dependency,
     // so the binding exists by the time the seat renders. The bound `t` keeps
     // the shell's own wording (and any future key changes) for free.
-    const modelT = client.locale.bind('model') as ModelSelectT
+    const modelT: ModelSelectT = ctx.locale.bind('model')
     scope.slots.inject('conversation.input.model', () => scope.slots.register({
       name: 'conversation.input.model',
       // Shadowing a single slot requires a lower priority value than the
       // shipped ModelSelect's default 0 (lowest renders).
       priority: -1,
-      inject: (sessionId: string) => {
+      inject: (sessionId) => {
         const directory = models.directoryFor(sessionId)
         return {
           available: sessions.subagentAddress(sessionId) === undefined,
@@ -946,19 +928,15 @@ export function apply(ctx: Context): void {
       ...props,
       rpc: enrichedRpc,
       t: modelT,
-      zh: localeActiveZh(client),
+      zh: localeActiveZh(ctx),
     })))
   })
 }
 
-/**
- * Whether the active dsh locale is Chinese. The locale service exposes its
- * snapshot through the declared module-level inject; any read failure falls
- * back to zh (the CodeBuddy catalog's own default language).
- */
-function localeActiveZh(ctx: { locale?: { getSnapshot?: () => { active: string } } }): boolean {
+/** Resolve Chinese copy, falling back to zh if the locale snapshot is unavailable. */
+function localeActiveZh(ctx: Context): boolean {
   try {
-    return ctx.locale?.getSnapshot?.()?.active !== 'en'
+    return ctx.locale.getSnapshot?.()?.active !== 'en'
   } catch {
     return true
   }
