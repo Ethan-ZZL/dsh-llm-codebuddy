@@ -30,7 +30,6 @@ import type {
   LlmReasoningEffortInfo,
   LlmResolvedModelInfo,
   Message,
-  PreparedAdapterCall,
   ResolvedRetryPolicy,
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
@@ -379,22 +378,6 @@ export class CodeBuddyAdapter extends LlmAdapter {
       // every request, so a declared-but-unsent capability would be a control
       // that silently does nothing.
       ...reasoning === undefined ? {} : { reasoning },
-    }
-  }
-
-  /**
-   * Bind model metadata and dispatch to one adapter generation. Defined here
-   * rather than inherited: hosts on 0.1.1-rc.2+ call it on every request, but
-   * the base class only gained a default implementation in that release.
-   */
-  override async prepareCall(
-    provider: string,
-    model: string,
-    signal?: AbortSignal,
-  ): Promise<PreparedAdapterCall> {
-    return {
-      model: await this.resolveModel(provider, model, signal),
-      stream: (options) => this.stream(options),
     }
   }
 

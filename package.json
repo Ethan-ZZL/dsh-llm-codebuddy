@@ -69,14 +69,14 @@
     "eventsource-parser": "^3.1.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "*",
-    "@deepseek-ai/dsh-attachment": "*",
-    "@deepseek-ai/dsh-client-ui-primitives": "*",
-    "@deepseek-ai/dsh-home-paths": "*",
-    "@deepseek-ai/dsh-llm": ">=0.1.2-rc.1",
-    "@deepseek-ai/dsh-settings": "*",
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-attachment": ">=0.1.5-rc.1",
+    "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.5-rc.1",
+    "@deepseek-ai/dsh-home-paths": ">=0.1.5-rc.1",
+    "@deepseek-ai/dsh-llm": ">=0.1.5-rc.1",
+    "@deepseek-ai/dsh-settings": ">=0.1.5-rc.1",
     "@deepseek-ai/schemastery": "^3.18.2",
-    "react": "*"
+    "react": "^18.2.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
