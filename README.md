@@ -1,8 +1,28 @@
-# @shatyuka/dsh-llm-codebuddy
+# dsh-llm-codebuddy
+
+**English** | [中文](README.zh.md)
 
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) plugin for **Tencent CodeBuddy**.
 
 Sign in through your browser — **no API key required** — and use CodeBuddy's own model list.
+
+## Features
+
+- **Browser OAuth sign-in** — authorize in a normal browser tab; no API key needed, ever.
+- **Full model catalog** — CodeBuddy's own models, with context windows, output caps, and credit multipliers; server-side additions and removals are picked up automatically.
+- **Streaming chat** — responses stream in real time.
+- **Tool calls** — function calling, with a clear error when a model does not support it.
+- **Reasoning effort** — pick a thinking level for models that support one.
+- **Image input** — attach images for vision-capable models (models without vision support may be routed to a different model by the server).
+- **Usage indicator** — a quota bar in the Web UI sidebar for both personal and enterprise plans, with an optional custom cap and a configurable danger threshold.
+
+## Compatibility
+
+| Requirement | Version |
+| --- | --- |
+| DeepSeek Harness (`dsh`) | `>= 0.1.5-rc.1` |
+
+Web UI features such as the settings page, model picker, and usage indicator require the `web` profile.
 
 ## Install
 
@@ -16,12 +36,19 @@ dsh plugin --profile web add @shatyuka/dsh-llm-codebuddy
 
 Open **Settings → CodeBuddy** in the Web UI and click **Sign in**. The browser login opens in a new tab; the harness writes the credential automatically. No terminal needed.
 
-You can also sign in from the terminal:
+Alternatively, sign in from the terminal:
 
 ```bash
-dsh plugin --profile web exec dsh-codebuddy-login              # sign in
-dsh plugin --profile web exec dsh-codebuddy-login --status     # who is signed in, plus the model list
-dsh plugin --profile web exec dsh-codebuddy-login --logout     # remove the stored credential
+# A CLI fallback; the Web UI sign-in above is recommended.
+
+# Sign in
+dsh plugin --profile web exec dsh-codebuddy-login
+
+# Show the signed-in account and the model list
+dsh plugin --profile web exec dsh-codebuddy-login --status
+
+# Remove the stored credential
+dsh plugin --profile web exec dsh-codebuddy-login --logout
 ```
 
 Once signed in, CodeBuddy's models appear in the model picker.
