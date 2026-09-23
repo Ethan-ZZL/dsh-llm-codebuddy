@@ -12,6 +12,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-settings'
 import { resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
 import type { RetryPolicyConfig } from '@deepseek-ai/dsh-llm'
 import { CodeBuddyAdapter } from './adapter.js'
@@ -26,6 +27,8 @@ import {
 } from './constants.js'
 import { CodeBuddySession } from './session.js'
 import { MessageLocale } from './locale.js'
+import { CODEBUDDY_SETTINGS_NAMESPACE } from './settings.js'
+import { CodeBuddySettingsSchema } from './settings-schema.js'
 
 export { CodeBuddyAdapter, httpErrorCode } from './adapter.js'
 export type { CodeBuddyAdapterOptions, CodeBuddyConnectionOptions } from './adapter.js'
@@ -53,6 +56,19 @@ export * from './constants.js'
 export { hasDisclosedCapacity } from './types.js'
 export type * from './types.js'
 export { MessageLocale, prefersChinese, wordingKeys } from './locale.js'
+export {
+  CODEBUDDY_SETTINGS_NAMESPACE,
+  CUSTOM_LIMIT_FIELD,
+  CUSTOM_LIMIT_MIN,
+  DANGER_PCT_FIELD,
+  DANGER_PCT_MAX,
+  DANGER_PCT_MIN,
+  DEFAULT_DANGER_PCT,
+  DEFAULT_SHOW_USAGE,
+  SHOW_USAGE_FIELD,
+} from './settings.js'
+export type { CodeBuddySettings, CodeBuddySettingsField } from './settings.js'
+export { CodeBuddySettingsSchema } from './settings-schema.js'
 
 /** Cordis plugin name. */
 export const name = 'llm-codebuddy'
@@ -141,6 +157,14 @@ export function apply(ctx: Context, config: Config = {}): void {
   })
 
   ctx.llm.registerAdapter([CODEBUDDY_PROVIDER], adapter)
+
+  // Durable preferences live in the Host user-settings document, so they
+  // survive a cleared browser profile and follow the account. The optional
+  // `settings` service keeps a provider-less deployment working; the browser
+  // scope then reports `unavailable` and the rows fall back to defaults.
+  ctx.inject(['settings'], (settingsCtx) => {
+    settingsCtx.settings.register(CODEBUDDY_SETTINGS_NAMESPACE, CodeBuddySettingsSchema)
+  })
 
   // A catalog edit changes which models this route advertises. The harness
   // catalog the Web client renders its provider groups from is cached

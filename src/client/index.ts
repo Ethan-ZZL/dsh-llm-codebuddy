@@ -33,6 +33,14 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { CodeBuddyModelSelect, MODEL_SELECT_CSS } from './model-select.js'
 import type { ModelSelectT } from './model-select.js'
+import { createUsagePrefs, usePersistentPrefs, useUsagePrefs } from './usage-prefs.js'
+import type { UsagePrefs } from './usage-prefs.js'
+import {
+  CODEBUDDY_SETTINGS_NAMESPACE,
+  CUSTOM_LIMIT_MIN,
+  DANGER_PCT_MAX,
+  DANGER_PCT_MIN,
+} from '../settings.js'
 import { CODEBUDDY_AUTH_CHANNEL as AUTH_CHANNEL } from '../protocol.js'
 import type {
   CodeBuddyAuthStatus as AuthStatus,
@@ -51,21 +59,6 @@ declare module '@deepseek-ai/cordis' {
 }
 
 /**
- * Local usage-indicator preferences: whether it shows, and an optional custom
- * quota cap that overrides the meter's reported limit.
- *
- * Both are UI-only affordances with no business meaning beyond this surface,
- * so they live in `localStorage` rather than the Host user-settings document a
- * feature plugin would adopt. The store is module-scoped so the settings page
- * controls and the sidebar indicator share one source of truth, and `storage`
- * events keep other tabs in sync without a Host round-trip.
- */
-const USAGE_PREF_KEY = 'dsh-codebuddy:show-usage'
-const CUSTOM_LIMIT_KEY = 'dsh-codebuddy:custom-limit'
-const DANGER_PCT_KEY = 'dsh-codebuddy:danger-pct'
-const usagePrefListeners = new Set<() => void>()
-
-/**
  * Login-state change notifier: lets the settings page tell the sidebar usage
  * indicator to re-read after a sign-in or sign-out completes, since the two are
  * independent components and the indicator's polling effect would otherwise
@@ -78,112 +71,6 @@ function emitLoginChange(): void {
 function subscribeLoginChange(listener: () => void): () => void {
   loginChangeListeners.add(listener)
   return () => { loginChangeListeners.delete(listener) }
-}
-
-/** Read the persisted show/hide preference; defaults to shown when unset/unreadable. */
-function getUsagePref(): boolean {
-  try {
-    return window.localStorage.getItem(USAGE_PREF_KEY) !== '0'
-  } catch {
-    return true
-  }
-}
-
-/** Persist the show/hide preference and notify every subscriber in every tab. */
-function setUsagePref(value: boolean): void {
-  try {
-    window.localStorage.setItem(USAGE_PREF_KEY, value ? '1' : '0')
-  } catch {
-    // A private-mode storage refusal still updates the in-memory listeners, so
-    // the toggle stays responsive for the lifetime of this tab.
-  }
-  emitUsagePref()
-}
-
-/**
- * Read the custom quota cap; `undefined` when unset or not a positive number.
- *
- * The cap overrides the meter's reported `limit` so `usedPercent` and the
- * tooltip reflect a budget the user cares about rather than the provider's
- * billing cycle. An empty/invalid value means "use the server's limit".
- */
-function getCustomLimit(): number | undefined {
-  try {
-    const raw = window.localStorage.getItem(CUSTOM_LIMIT_KEY)
-    if (raw === null) return undefined
-    const parsed = Number(raw)
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
-  } catch {
-    return undefined
-  }
-}
-
-/** Persist the custom quota cap and notify subscribers. */
-function setCustomLimit(value: number | undefined): void {
-  try {
-    if (value === undefined) {
-      window.localStorage.removeItem(CUSTOM_LIMIT_KEY)
-    } else {
-      window.localStorage.setItem(CUSTOM_LIMIT_KEY, String(value))
-    }
-  } catch {
-    // See setUsagePref: an in-memory update still reaches this tab's listeners.
-  }
-  emitUsagePref()
-}
-
-/**
- * Read the danger-percentage threshold; defaults to 90 when unset/invalid.
- *
- * Above this used-percentage the indicator fill turns the error color, so the
- * user can spot an allowance that is about to run out without watching the
- * exact number.
- */
-const DEFAULT_DANGER_PCT = 90
-function getDangerPct(): number {
-  try {
-    const raw = window.localStorage.getItem(DANGER_PCT_KEY)
-    if (raw === null) return DEFAULT_DANGER_PCT
-    const parsed = Number(raw)
-    return Number.isFinite(parsed) && parsed > 0 && parsed <= 100 ? parsed : DEFAULT_DANGER_PCT
-  } catch {
-    return DEFAULT_DANGER_PCT
-  }
-}
-
-/** Persist the danger-percentage threshold and notify subscribers. */
-function setDangerPct(value: number | undefined): void {
-  try {
-    if (value === undefined) {
-      window.localStorage.removeItem(DANGER_PCT_KEY)
-    } else {
-      window.localStorage.setItem(DANGER_PCT_KEY, String(value))
-    }
-  } catch {
-    // See setUsagePref: an in-memory update still reaches this tab's listeners.
-  }
-  emitUsagePref()
-}
-
-/** Subscribe to preference changes; returns the disposer. */
-function subscribeUsagePref(listener: () => void): () => void {
-  usagePrefListeners.add(listener)
-  return () => { usagePrefListeners.delete(listener) }
-}
-
-function emitUsagePref(): void {
-  for (const listener of usagePrefListeners) listener()
-}
-
-// Cross-tab sync: a `storage` event fires in every *other* tab when any key
-// changes, so each tab's indicator and controls re-read without a Host call.
-if (typeof window !== 'undefined' && window.localStorage !== undefined) {
-  window.addEventListener('storage', (event) => {
-    if (event.key === USAGE_PREF_KEY || event.key === CUSTOM_LIMIT_KEY
-      || event.key === DANGER_PCT_KEY || event.key === null) {
-      emitUsagePref()
-    }
-  })
 }
 
 /** Failed RPC result used by the settings error presenter. */
@@ -294,35 +181,20 @@ function usageTooltip(window: UsageWindow, t: Translate): string {
 }
 
 /**
- * The usage indicator rendered above the Settings trigger in the sidebar foot.
- *
- * Polls the host `usage` endpoint while signed in, then renders a horizontal
- * bar with a percentage in the wide column and a ring in the rail. Both are
- * wrapped in a {@link Tooltip} that surfaces the exact used/total figures on
- * hover. A signed-out account, a meter outage, or an unparseable reply all
- * render nothing — the affordance is purely additive.
- * @param rpc - the connection RPC face.
- * @param t - the bound translate function.
- * @param wide - whether the sidebar renders wide content.
+ * The usage indicator: a bar with a percentage in the wide column, a ring in
+ * the rail, both wrapped in a Tooltip with the exact figures. Signed out, a
+ * meter outage, or an unparseable reply all render nothing — the affordance is
+ * purely additive.
  */
-function UsageIndicator({ rpc, t, wide }: {
+function UsageIndicator({ rpc, t, wide, prefs }: {
   rpc: CodeBuddyRpc
   t: Translate
   wide: boolean
+  prefs: UsagePrefs
 }): ReactElement | null {
   const [usage, setUsage] = useState<UsageResult | undefined>(undefined)
-  const [showUsage, setShowUsage] = useState<boolean>(getUsagePref())
-  const [customLimit, setCustomLimitState] = useState<number | undefined>(getCustomLimit())
-  const [dangerPct, setDangerPctState] = useState<number>(getDangerPct())
-
-  // Re-render when the preference flips from the settings controls (same tab)
-  // or a `storage` event (other tab); the polling effect below reads the
-  // latest value, so a disabled indicator stops fetching on the next tick.
-  useEffect(() => subscribeUsagePref(() => {
-    setShowUsage(getUsagePref())
-    setCustomLimitState(getCustomLimit())
-    setDangerPctState(getDangerPct())
-  }), [])
+  // Shared preference store: a flip in the settings rows lands here directly.
+  const { showUsage, customLimit, dangerPct } = useUsagePrefs(prefs)
 
   // Re-read usage immediately when a sign-in or sign-out completes, rather
   // than waiting for the next 60s polling tick.
@@ -347,8 +219,7 @@ function UsageIndicator({ rpc, t, wide }: {
       }
     }
     void read()
-    // The allowance moves only on generation, so a slow refresh is enough to
-    // stay current without hammering the meter plane.
+    // The allowance moves only on generation, so a slow refresh is enough.
     const timer = window.setInterval(read, USAGE_REFRESH_MS)
     return () => {
       stopped = true
@@ -356,16 +227,16 @@ function UsageIndicator({ rpc, t, wide }: {
     }
   }, [rpc, showUsage])
 
-  // The preference gates the whole affordance: hidden stops polling (the
-  // effect above returns early) and renders nothing.
+  // The preference gates the whole affordance: hidden stops polling and
+  // renders nothing.
   if (!showUsage) return null
 
   const primary = usage?.primary
   if (primary === undefined || primary.used === undefined || primary.limit === undefined) {
     return null
   }
-  // A custom cap overrides the meter's reported limit, so the percentage and
-  // tooltip reflect a budget the user set rather than the provider's cycle.
+  // A custom cap overrides the meter's reported limit, so the percentage
+  // reflects a budget the user set.
   const limit = customLimit ?? primary.limit
   const usedPct = limit > 0
     ? Math.min(Math.max((primary.used / limit) * 100, 0), 100)
@@ -390,12 +261,9 @@ function UsageIndicator({ rpc, t, wide }: {
     )
     return h(Tooltip, { label, side: 'top', delayMs: 300, children: anchor })
   }
-  // Rail: a ring whose arc fills with usage, with the percentage centered
-  // inside it. The full label stays in the tooltip so the rail column keeps its
-  // icon-only geometry; the ring is sized to fit a two-digit percentage. The
+  // Rail: a ring whose arc fills with usage, percentage centered inside. The
   // arc circles are rotated -90° about their center so the fill starts at 12
-  // o'clock, while the svg itself stays unrotated so the centered text renders
-  // upright.
+  // o'clock, while the svg stays unrotated so the text renders upright.
   const size = 28
   const stroke = 2.5
   const r = (size - stroke) / 2
@@ -444,31 +312,15 @@ const USAGE_REFRESH_MS = 60_000
  * `rpc` and `t` arrive through the slot's `inject`; the shell owns modal
  * visibility, so no close affordance is needed here.
  */
-function CodeBuddySection({ rpc, t }: {
+function CodeBuddySection({ rpc, t, prefs }: {
   rpc: CodeBuddyRpc
   t: Translate
+  prefs: UsagePrefs
 }): ReactElement {
   const [phase, setPhase] = useState<Phase>('loading')
   const [status, setStatus] = useState<AuthStatus | undefined>(undefined)
   const [error, setError] = useState<string | undefined>(undefined)
   const [loginState, setLoginState] = useState<string | undefined>(undefined)
-  const [showUsage, setShowUsage] = useState<boolean>(getUsagePref())
-  const [menuOpen, setMenuOpen] = useState<boolean>(false)
-  // The text fields mirror persisted values while retaining in-progress input.
-  const [limitText, setLimitText] = useState<string>(() => {
-    const limit = getCustomLimit()
-    return limit === undefined ? '' : String(limit)
-  })
-  const [dangerText, setDangerText] = useState<string>(() => String(getDangerPct()))
-
-  // Keep the controls in sync with preference flips from the sidebar or other
-  // tabs; the sidebar indicator reads the same store, so the two stay aligned.
-  useEffect(() => subscribeUsagePref(() => {
-    setShowUsage(getUsagePref())
-    const next = getCustomLimit()
-    setLimitText(next === undefined ? '' : String(next))
-    setDangerText(String(getDangerPct()))
-  }), [])
 
   const refresh = useCallback(async () => {
     const result = await rpc.call('status', {})
@@ -543,19 +395,9 @@ function CodeBuddySection({ rpc, t }: {
 
   const signedIn = status?.loggedIn === true
 
-  // The usage preferences (show/hide, custom cap, danger threshold) are UI-only
-  // and persist in localStorage, so they are configurable whether or not an
-  // account is signed in — a user can set them up before first login.
-  const usagePrefs = h(UsagePrefRows, {
-    t,
-    showUsage,
-    menuOpen,
-    setMenuOpen,
-    limitText,
-    setLimitText,
-    dangerText,
-    setDangerText,
-  })
+  // The usage preferences live in the Host settings document, so they are
+  // configurable whether or not an account is signed in.
+  const usagePrefs = h(UsagePrefRows, { t, prefs })
 
   return h('div', { style: s.section },
     h('h2', { style: s.title }, 'CodeBuddy'),
@@ -590,9 +432,8 @@ function CodeBuddySection({ rpc, t }: {
       : h('div', { style: s.status },
           h('p', { style: s.muted },
             loginState !== undefined ? t('waiting')
-              // A credential exists but expired: name the remedy rather than
-              // reporting a bare "not signed in", which reads as "nothing ever
-              // happened here" and hides that a sign-in is what is missing.
+              // Expired names the remedy; a bare "not signed in" would hide
+              // that a sign-in is what is missing.
               : status?.expired === true ? t('expired')
                 : t('notSignedIn'),
           ),
@@ -609,22 +450,36 @@ function CodeBuddySection({ rpc, t }: {
   )
 }
 
+/** Format a persisted cap for its input field; unset reads as empty ("use the meter's limit"). */
+function formatLimit(value: number | undefined): string {
+  return value === undefined ? '' : String(value)
+}
+
 /**
- * The three usage-preference rows, extracted so they render under both the
- * signed-in and signed-out branches — they are UI-only and persist regardless
- * of login state.
+ * The three usage-preference rows. Self-contained: they read the shared store
+ * and keep their own drafts, so a keystroke re-renders this component only,
+ * and each draft re-syncs only when its own persisted value moves.
  */
-function UsagePrefRows({ t, showUsage, menuOpen, setMenuOpen, limitText, setLimitText, dangerText, setDangerText }: {
+function UsagePrefRows({ t, prefs }: {
   t: Translate
-  showUsage: boolean
-  menuOpen: boolean
-  setMenuOpen: (update: boolean | ((prev: boolean) => boolean)) => void
-  limitText: string
-  setLimitText: (v: string) => void
-  dangerText: string
-  setDangerText: (v: string) => void
+  prefs: UsagePrefs
 }): ReactElement {
+  const { showUsage, customLimit, dangerPct } = useUsagePrefs(prefs)
+  const [menuOpen, setMenuOpen] = useState<boolean>(false)
+  const [limitText, setLimitText] = useState<string>(() => formatLimit(customLimit))
+  const [dangerText, setDangerText] = useState<string>(() => String(dangerPct))
+  // Own subscription: the flag flips on scope snapshots, not value changes.
+  const persistent = usePersistentPrefs(prefs)
+
+  useEffect(() => { setLimitText(formatLimit(customLimit)) }, [customLimit])
+  useEffect(() => { setDangerText(String(dangerPct)) }, [dangerPct])
+
   return h(Fragment, null,
+    // Non-loopback Host: the settings transport stays process-local, so edits
+    // live only in this tab.
+    !persistent
+      ? h('p', { className: 'cb-prefNotice' }, t('notPersistedNotice'))
+      : null,
     // Show/hide the usage indicator: a Menu dropdown so the control matches
     // the General-section selector affordance (no Switch ships with shell).
     h('div', { className: 'cb-prefRow' },
@@ -642,7 +497,7 @@ function UsagePrefRows({ t, showUsage, menuOpen, setMenuOpen, limitText, setLimi
         selectedId: showUsage ? '1' : '0',
         onSelect: (id: string) => {
           setMenuOpen(false)
-          setUsagePref(id === '1')
+          prefs.setShowUsage(id === '1')
         },
         align: 'end',
         portal: true,
@@ -658,7 +513,8 @@ function UsagePrefRows({ t, showUsage, menuOpen, setMenuOpen, limitText, setLimi
       }),
     ),
     // Custom quota cap: overrides the meter's reported limit so the percentage
-    // reflects a budget the user set. Empty = use the server's limit.
+    // reflects a budget the user set. Empty clears the field, so the section
+    // re-inherits the schema default and the meter's own total is used again.
     h('div', { className: 'cb-prefRow' },
       h('div', { className: 'cb-prefRowText' },
         h('div', { className: 'cb-prefTitle' }, t('customLimit')),
@@ -667,7 +523,7 @@ function UsagePrefRows({ t, showUsage, menuOpen, setMenuOpen, limitText, setLimi
       h(Input, {
         type: 'number',
         inputMode: 'numeric',
-        min: 0,
+        min: CUSTOM_LIMIT_MIN,
         step: 1,
         placeholder: t('customLimitPlaceholder'),
         className: 'cb-prefInput',
@@ -675,10 +531,13 @@ function UsagePrefRows({ t, showUsage, menuOpen, setMenuOpen, limitText, setLimi
         onChange: (e: ChangeEvent<HTMLInputElement>) => { setLimitText(e.currentTarget.value) },
         onBlur: () => {
           const parsed = Number(limitText)
-          if (limitText.length === 0 || !Number.isFinite(parsed) || parsed <= 0) {
-            setCustomLimit(undefined)
+          if (limitText.length === 0 || !Number.isFinite(parsed) || parsed < CUSTOM_LIMIT_MIN) {
+            prefs.setCustomLimit(undefined)
+            // Reset the draft directly: a no-op publish (value already unset)
+            // never fires the adoption subscription.
+            setLimitText(formatLimit(customLimit))
           } else {
-            setCustomLimit(parsed)
+            prefs.setCustomLimit(parsed)
           }
         },
       }),
@@ -692,21 +551,20 @@ function UsagePrefRows({ t, showUsage, menuOpen, setMenuOpen, limitText, setLimi
       h(Input, {
         type: 'number',
         inputMode: 'numeric',
-        min: 1,
-        max: 100,
+        min: DANGER_PCT_MIN,
+        max: DANGER_PCT_MAX,
         step: 1,
         className: 'cb-prefInput',
         value: dangerText,
         onChange: (e: ChangeEvent<HTMLInputElement>) => { setDangerText(e.currentTarget.value) },
         onBlur: () => {
           const parsed = Number(dangerText)
-          if (!Number.isFinite(parsed) || parsed < 1 || parsed > 100) {
-            setDangerPct(undefined)
-            setDangerText(String(getDangerPct()))
+          if (!Number.isFinite(parsed) || parsed < DANGER_PCT_MIN || parsed > DANGER_PCT_MAX) {
+            // Clear rather than store a value the schema would refuse.
+            prefs.setDangerPct(undefined)
+            setDangerText(String(dangerPct))
           } else {
-            const clamped = Math.round(parsed)
-            setDangerPct(clamped)
-            setDangerText(String(clamped))
+            prefs.setDangerPct(Math.round(parsed))
           }
         },
       }),
@@ -739,6 +597,7 @@ const DICTS = {
     'department': '部门',
     'showUsage': '显示额度余量',
     'showUsageDesc': '在侧边栏底部设置按钮上方显示已用额度进度。',
+    'notPersistedNotice': '当前连接不持久保存偏好：在此处的修改仅对本次会话生效。',
     'on': '开',
     'off': '关',
     'customLimit': '自定义额度上限',
@@ -769,6 +628,7 @@ const DICTS = {
     'department': 'Department',
     'showUsage': 'Show usage allowance',
     'showUsageDesc': 'Display the used-allowance progress above the Settings button at the sidebar foot.',
+    'notPersistedNotice': 'Preferences are not persisted over this connection: changes here last only for this session.',
     'on': 'On',
     'off': 'Off',
     'customLimit': 'Custom quota cap',
@@ -795,16 +655,16 @@ type Translate = TranslateNS<typeof NS>
 
 /**
  * Module-level service declarations. Beyond this plugin's own seats, the
- * model-selector shadow declares the ModelDirectoryResolver's own dependency
+ * model-selector shadow declares the ModelDirectoryResolver's dependency
  * closure: the service forwards method calls with the CALLER's context as
  * receiver, so `directoryFor` reads `sessions` / `remote` / `remote.session`
- * through this plugin's inject declaration (mirroring the official
- * ui-model-selection plugin's list).
+ * through this inject declaration.
  */
 export const inject = [
   'slots',
   'locale',
   'connection',
+  'settingsScope',
   'modelDirectories',
   'sessions',
   'remote',
@@ -812,19 +672,16 @@ export const inject = [
 ] as const
 
 /**
- * Scoped CSS for the CodeBuddy settings rows.
- *
- * The shipped General-section rows (Enter behavior, Appearance) use CSS-module
- * classNames whose `:hover` and focus styles the dsh-css system injects; an
- * inline `style` object cannot express those pseudo-states. This injects one
- * `<style>` tag carrying the same selector affordance (hover background + focus
- * ring) under a plugin-scoped class, as the shell's own feature plugins do.
+ * Scoped CSS for the settings rows: inline styles cannot express the `:hover`
+ * and focus pseudo-states the shipped rows use, so one `<style>` tag carries
+ * them under plugin-scoped classes.
  */
 const PREF_CSS = `
 .cb-prefRow{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--dsw-alias-border-l2)}
 .cb-prefRowText{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0;padding-right:48px}
+.cb-prefNotice{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-tertiary)}
 .cb-prefTitle{color:var(--dsw-alias-label-primary);font-size:14px;font-weight:400;line-height:22px}
-.cb-prefDesc{color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:400;line-height:18px}
+.cb-prefDesc{color:var(--dsw-alias-label-tertiary);font-size:12px;font-weight:400;line-height:18px}
 .cb-prefSelector{background:var(--dsw-alias-bg-module-platform);height:36px;font:inherit;color:var(--dsw-alias-label-primary);cursor:pointer;border:none;border-radius:18px;align-items:center;gap:12px;padding:0 14px;font-size:14px;line-height:22px;display:inline-flex;flex:none}
 .cb-prefSelector:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .cb-prefSelector:focus-visible{outline:1.5px solid var(--dsw-alias-brand-primary);outline-offset:2px}
@@ -850,10 +707,19 @@ export function apply(ctx: Context): void {
 
   const rpc = bindCodeBuddyRpc(ctx.connection.rpc)
   const t = ctx.locale.bind(NS)
-  const injected = () => ({ rpc })
 
-  // The language is resolved here and never reaches the host. Subscribers also
-  // fire for dictionary registrations, so only a real change is worth a request.
+  // Durable preferences: one scope over this plugin's namespace. Without a
+  // settings provider the scope reports `unavailable` and the surface keeps
+  // the schema defaults, so the controls stay usable.
+  const prefs = createUsagePrefs(ctx.settingsScope.bind({
+    namespace: CODEBUDDY_SETTINGS_NAMESPACE,
+  }))
+  ctx.effect(() => () => { prefs.dispose() }, 'dsh-llm-codebuddy: settings scope subscription')
+
+  const injected = () => ({ rpc, prefs })
+
+  // Only a real locale change is worth a request; subscribers also fire for
+  // dictionary registrations.
   ctx.effect(() => {
     const locale = ctx.locale
     let last: string | undefined
@@ -876,10 +742,8 @@ export function apply(ctx: Context): void {
     inject: injected,
   }, CodeBuddySection))
 
-  // A usage indicator above the Settings trigger: the sidebar foot renders
-  // `sidebar.footer.action` entries above the settings seat, so this lands
-  // directly above the Settings button. It renders nothing while signed out or
-  // while the meter plane is unreachable, so the column geometry is unchanged.
+  // A usage indicator above the Settings trigger; renders nothing while signed
+  // out or while the meter plane is unreachable.
   ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
     name: 'sidebar.footer.action',
     id: 'codebuddy-usage',
@@ -889,12 +753,9 @@ export function apply(ctx: Context): void {
   }, UsageIndicator))
 
   // The CodeBuddy-flavoured composer model seat, shadowing
-  // `conversation.input.model` (single-occupant, owned by ui-model-selection's
-  // ModelSelect) at a lower priority value. Selection state stays shared: the
-  // injected face resolves the SAME per-session ModelDirectory the official
-  // seat and the /model popup read, so picking here updates both. Enriched
-  // rows (tags, credit multipliers, tooltips) come from this plugin's own
-  // RPC channel.
+  // `conversation.input.model` at a lower priority value. Selection state stays
+  // shared: the injected face resolves the SAME per-session ModelDirectory the
+  // official seat and the /model popup read, so picking here updates both.
   ctx.inject(['slots', 'modelDirectories', 'sessions', 'remote', 'remote.session'], (scope) => {
     const models = scope.modelDirectories
     const sessions = scope.sessions
@@ -904,15 +765,12 @@ export function apply(ctx: Context): void {
         return result.ok && result.value.loggedIn ? result.value.models : undefined
       },
     }
-    // Copy comes from the official `model` namespace: ui-model-selection
-    // registers its dictionaries and this plugin declares it as a dependency,
-    // so the binding exists by the time the seat renders. The bound `t` keeps
-    // the shell's own wording (and any future key changes) for free.
+    // Copy comes from the official `model` namespace, keeping the shell's own
+    // wording (and any future key changes) for free.
     const modelT: ModelSelectT = ctx.locale.bind('model')
     scope.slots.inject('conversation.input.model', () => scope.slots.register({
       name: 'conversation.input.model',
-      // Shadowing a single slot requires a lower priority value than the
-      // shipped ModelSelect's default 0 (lowest renders).
+      // Shadowing requires a lower priority than the shipped default 0.
       priority: -1,
       inject: (sessionId) => {
         const directory = models.directoryFor(sessionId)
