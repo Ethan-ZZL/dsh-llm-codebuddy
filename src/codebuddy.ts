@@ -63,7 +63,7 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
  * @throws Error when the service refuses or answers an unusable body.
  */
 export async function requestAuthState(signal?: AbortSignal): Promise<AuthState> {
-  const response = await fetch(`${CODEBUDDY_ENDPOINT}/v2/plugin/auth/state?platform=ide`, {
+  const response = await fetch(`${CODEBUDDY_ENDPOINT}/v2/plugin/auth/state?platform=CLI`, {
     method: 'POST',
     headers: {
       'Accept': 'application/json',
