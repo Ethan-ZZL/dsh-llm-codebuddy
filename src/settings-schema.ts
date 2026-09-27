@@ -1,7 +1,8 @@
 /**
- * Host-side schema for the durable settings section; split from
- * `./settings.js` so the browser bundle never pulls schemastery in — only the
- * Host registers the schema, the browser receives the serialized envelope.
+ * Durable preference fields the Web client edits.
+ *
+ * Only the Host composes these into its plugin Config (as volatile fields);
+ * the browser receives the serialized envelope through the settings transport.
  *
  * @module dsh-llm-codebuddy/settings-schema
  */
@@ -25,8 +26,10 @@ import type { CodeBuddySettings } from './settings.js'
  * no default: an absent field resolves to `undefined`, keeping "follow the
  * meter's limit" expressible.
  */
-export const CodeBuddySettingsSchema: z<CodeBuddySettings> = z.object({
+export const SettingsFields: {
+  [K in keyof CodeBuddySettings]-?: z<CodeBuddySettings[K]>
+} = {
   [SHOW_USAGE_FIELD]: z.boolean().default(DEFAULT_SHOW_USAGE),
   [CUSTOM_LIMIT_FIELD]: z.number().min(CUSTOM_LIMIT_MIN),
   [DANGER_PCT_FIELD]: z.number().step(1).min(DANGER_PCT_MIN).max(DANGER_PCT_MAX).default(DEFAULT_DANGER_PCT),
-})
+}

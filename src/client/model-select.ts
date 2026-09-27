@@ -12,7 +12,7 @@
 
 import type { Key, ReactElement } from 'react'
 import { createElement as h, Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { IconChevronDownOutline14, IconChevronRightOutline14, IconCheckOutline16, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconChevronDownOutlineMedium, IconChevronRightOutlineMedium, IconCheckOutlineMedium, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ModelSelectInjected } from '@deepseek-ai/dsh-client-ui-model-selection/client'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { CODEBUDDY_PROVIDER } from '../constants.js'
@@ -351,7 +351,7 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
     },
       h('span', { className: 'cbms-triggerLabel' }, modelLabel),
       effortLabel !== undefined ? h('span', { className: 'cbms-triggerEffort' }, effortLabel) : null,
-      h(IconChevronDownOutline14, { className: `cbms-chevron${open ? ' cbms-chevronOpen' : ''}` }),
+      h(IconChevronDownOutlineMedium, { className: `cbms-chevron${open ? ' cbms-chevronOpen' : ''}` }),
     ),
     open ? h('div', {
       id: `${id}-menu`,
@@ -367,7 +367,7 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
         },
           h('span', { className: 'cbms-cellLabel' }, t('menu.model')),
           h('span', { className: 'cbms-cellValue' }, modelLabel),
-          h(IconChevronRightOutline14, { className: 'cbms-cellChevron' }),
+          h(IconChevronRightOutlineMedium, { className: 'cbms-cellChevron' }),
         ),
         reasoning !== undefined ? h('button', {
           ref: itemRef(), type: 'button', role: 'menuitem', className: 'cbms-cell',
@@ -375,7 +375,7 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
         },
           h('span', { className: 'cbms-cellLabel' }, t('menu.effort')),
           h('span', { className: 'cbms-cellValue' }, effortLabel),
-          h(IconChevronRightOutline14, { className: 'cbms-cellChevron' }),
+          h(IconChevronRightOutlineMedium, { className: 'cbms-cellChevron' }),
         ) : null,
       ) : null,
       pane === 'model' ? h(Fragment, null,
@@ -431,7 +431,7 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
                 ),
                 // The selection check comes before the rate, so an
                 // unselected row's multiplier sits flush right.
-                h('span', { className: 'cbms-check' }, selected ? h(IconCheckOutline16, null) : null),
+                h('span', { className: 'cbms-check' }, selected ? h(IconCheckOutlineMedium, null) : null),
                 rate !== undefined ? h('span', {
                   className: `cbms-credits${rate.promo ? ' cbms-creditsPromo' : rate.free ? ' cbms-creditsFree' : ''}`,
                   ...rate.tint === undefined ? {} : { style: { color: rate.tint } },
@@ -462,7 +462,7 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
             h('span', { className: 'cbms-optionCopy' },
               h('span', { className: 'cbms-modelName' }, level.label),
             ),
-            h('span', { className: 'cbms-check' }, selected ? h(IconCheckOutline16, null) : null),
+            h('span', { className: 'cbms-check' }, selected ? h(IconCheckOutlineMedium, null) : null),
           )
         }),
       ) : null,

@@ -12,7 +12,6 @@
  */
 
 import {
-  contentHasImage,
   CONTEXT_WINDOW_EXCEEDED_CODE,
   isContextWindowExceededError,
   isQuotaExceededError,
@@ -29,7 +28,7 @@ import type {
   LlmProviderInfo,
   LlmReasoningEffortInfo,
   LlmResolvedModelInfo,
-  Message,
+  RequestMessage,
   ResolvedRetryPolicy,
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
@@ -94,9 +93,12 @@ function requestId(headers: Headers): ReturnType<typeof ProviderRequestId> | und
   return value === null || value.length === 0 ? undefined : ProviderRequestId(value)
 }
 
-/** Whether any message in the conversation carries image content. */
-function messagesHaveImage(messages: readonly Message[]): boolean {
-  return messages.some(message => contentHasImage(message.content))
+/** Whether any message in the conversation carries retained image content. */
+function messagesHaveRetainedImage(messages: readonly RequestMessage[]): boolean {
+  // Offloaded occurrences project to placeholder text in the serializer, so
+  // they read no bytes; only a retained occurrence needs the attachment store.
+  return messages.some(message => message.content.some(block =>
+    block.type === 'image' && block.offloaded !== true))
 }
 
 /**
@@ -413,7 +415,7 @@ export class CodeBuddyAdapter extends LlmAdapter {
       )
     }
 
-    if (supportsImages && messagesHaveImage(options.messages)) {
+    if (supportsImages && messagesHaveRetainedImage(options.messages)) {
       // Image content is only serializable through the durable attachment
       // service; a host without it would silently drop the pixels.
       if (this.config.resolveAttachments?.() === undefined) {

@@ -1,5 +1,5 @@
 /**
- * Durable usage preferences: the view of the Host settings document the
+ * Durable usage preferences: the view of the Host configuration form the
  * settings rows and the sidebar indicator read — optimistic writes, values
  * adopted from the Host, one shared subscription.
  *
@@ -7,7 +7,7 @@
  */
 
 import { useSyncExternalStore } from 'react'
-import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 import {
   CUSTOM_LIMIT_FIELD,
   CUSTOM_LIMIT_MIN,
@@ -67,23 +67,23 @@ export interface UsagePrefs {
   setCustomLimit(value: number | undefined): void
   /** Set the danger-color threshold; `undefined` restores the default. */
   setDangerPct(value: number | undefined): void
-  /** Release the scope subscription; called on plugin unload. */
+  /** Release the form subscription; called on plugin unload. */
   dispose(): void
 }
 
 /**
- * Build the preference surface over one bound settings scope.
+ * Build the preference surface over the plugin entry's configuration form.
  * @returns the surface shared by every reader in this tab.
  */
-export function createUsagePrefs(scope: SettingsScope<CodeBuddySettings>): UsagePrefs {
-  const initial = scope.getSnapshot().value
+export function createUsagePrefs(form: ConfigForm<CodeBuddySettings>): UsagePrefs {
+  const initial = form.getSnapshot().value
   let current: CodeBuddySettings = initial === undefined ? FALLBACK : normalize(initial)
   const listeners = new Set<() => void>()
 
   // `loading` counts as persistent: a notice before the first Host answer
-  // would be noise. Only a settled non-writable scope reports not persisted.
+  // would be noise. Only a settled non-writable form reports not persisted.
   const persistent = (): boolean => {
-    const snapshot = scope.getSnapshot()
+    const snapshot = form.getSnapshot()
     return snapshot.status === 'loading' || (snapshot.mode === 'host' && snapshot.writable)
   }
   let lastPersistent = persistent()
@@ -97,7 +97,7 @@ export function createUsagePrefs(scope: SettingsScope<CodeBuddySettings>): Usage
   // The persistence flag publishes separately from the value: `writable` can
   // flip while the section is byte-identical (defaults, no user overrides).
   const adopt = (): void => {
-    const snapshot = scope.getSnapshot()
+    const snapshot = form.getSnapshot()
     if (snapshot.value !== undefined) publish(normalize(snapshot.value))
     const nextPersistent = persistent()
     if (nextPersistent !== lastPersistent) {
@@ -106,9 +106,9 @@ export function createUsagePrefs(scope: SettingsScope<CodeBuddySettings>): Usage
     }
   }
 
-  const unsubscribeScope = scope.subscribe(adopt)
+  const unsubscribeForm = form.subscribe(adopt)
 
-  const write = (optimistic: CodeBuddySettings, persist: () => Promise<void>): void => {
+  const write = (optimistic: CodeBuddySettings, persist: () => Promise<boolean>): void => {
     publish(optimistic)
     void persist().then(adopt, adopt)
   }
@@ -121,7 +121,7 @@ export function createUsagePrefs(scope: SettingsScope<CodeBuddySettings>): Usage
     },
     isPersistent: () => lastPersistent,
     setShowUsage: (value) => {
-      write({ ...current, showUsage: value }, () => scope.set(SHOW_USAGE_FIELD, value))
+      write({ ...current, showUsage: value }, () => form.set(SHOW_USAGE_FIELD, value))
     },
     setCustomLimit: (value) => {
       // Only key absence means "follow the meter" (`exactOptionalPropertyTypes`
@@ -131,20 +131,20 @@ export function createUsagePrefs(scope: SettingsScope<CodeBuddySettings>): Usage
       write(
         next,
         value === undefined
-          ? () => scope.unset(CUSTOM_LIMIT_FIELD)
-          : () => scope.set(CUSTOM_LIMIT_FIELD, value),
+          ? () => form.unset(CUSTOM_LIMIT_FIELD)
+          : () => form.set(CUSTOM_LIMIT_FIELD, value),
       )
     },
     setDangerPct: (value) => {
       write(
         { ...current, dangerPct: value ?? DEFAULT_DANGER_PCT },
         value === undefined
-          ? () => scope.unset(DANGER_PCT_FIELD)
-          : () => scope.set(DANGER_PCT_FIELD, value),
+          ? () => form.unset(DANGER_PCT_FIELD)
+          : () => form.set(DANGER_PCT_FIELD, value),
       )
     },
     dispose: () => {
-      unsubscribeScope()
+      unsubscribeForm()
       listeners.clear()
     },
   }

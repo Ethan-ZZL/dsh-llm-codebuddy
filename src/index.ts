@@ -5,15 +5,12 @@
  * login rather than an API key, and serving the models CodeBuddy's own
  * (non-OpenAI) catalog endpoint reports.
  *
- * Sign in through the Web Settings → CodeBuddy page. No API key is required,
- * and the running harness picks the credential up without a restart.
- *
  * @module dsh-llm-codebuddy
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type {} from '@deepseek-ai/dsh-settings'
-import { resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
+import z from '@deepseek-ai/schemastery'
+import { resolveRetryPolicy, RetryPolicySchema } from '@deepseek-ai/dsh-llm'
 import type { RetryPolicyConfig } from '@deepseek-ai/dsh-llm'
 import { CodeBuddyAdapter } from './adapter.js'
 import type { CodeBuddyConnectionOptions } from './adapter.js'
@@ -27,8 +24,8 @@ import {
 } from './constants.js'
 import { CodeBuddySession } from './session.js'
 import { MessageLocale } from './locale.js'
-import { CODEBUDDY_SETTINGS_NAMESPACE } from './settings.js'
-import { CodeBuddySettingsSchema } from './settings-schema.js'
+import { SettingsFields } from './settings-schema.js'
+import { SHOW_USAGE_FIELD, CUSTOM_LIMIT_FIELD, DANGER_PCT_FIELD } from './settings.js'
 
 export { CodeBuddyAdapter, httpErrorCode } from './adapter.js'
 export type { CodeBuddyAdapterOptions, CodeBuddyConnectionOptions } from './adapter.js'
@@ -68,7 +65,7 @@ export {
   SHOW_USAGE_FIELD,
 } from './settings.js'
 export type { CodeBuddySettings, CodeBuddySettingsField } from './settings.js'
-export { CodeBuddySettingsSchema } from './settings-schema.js'
+export { SettingsFields } from './settings-schema.js'
 
 /** Cordis plugin name. */
 export const name = 'llm-codebuddy'
@@ -76,37 +73,46 @@ export const name = 'llm-codebuddy'
 /** This plugin needs the LLM seam to register its route on. */
 export const inject = ['llm']
 
-// The module is deliberately exported as named members only, with no default
-// export. Cordis's loader collapses a module via `exports.default ?? exports`,
-// so a `export default apply` would make the plugin a bare function and discard
-// `inject` and `name` alongside it — the mount then fails with `cannot get
-// property "llm" without inject`.
+// No default export on purpose: Cordis's loader collapses a module via
+// `exports.default ?? exports`, which would discard `inject` and `name`.
 
 /**
- * Plugin config. Every field is optional: the shipped defaults reach the public
- * CodeBuddy service, and there is no credential field at all by design — the
- * only way in is the browser login.
+ * Plugin config. Route facts are ordinary entry config; the three usage
+ * preference fields are `volatile`, so the Web settings forms own their
+ * durable storage and edits apply without a reload.
  */
-export interface Config {
+export const Config = z.object({
   /** Chat endpoint base; defaults to CodeBuddy's OpenAI-compatible route. */
-  baseURL?: string
+  baseURL: z.string(),
   /** Context capacity for a model the catalog does not size. */
-  defaultContextWindow?: number
+  defaultContextWindow: z.number(),
   /** Per-request output cap for a model the catalog does not cap. */
-  defaultMaxTokens?: number
+  defaultMaxTokens: z.number(),
   /** Maximum provider idle time while one stream read is outstanding. */
-  streamIdleTimeoutMs?: number
+  streamIdleTimeoutMs: z.number(),
   /** Provider-owned retry policy; omission selects the harness defaults. */
+  retryPolicy: RetryPolicySchema,
+  [SHOW_USAGE_FIELD]: SettingsFields[SHOW_USAGE_FIELD].volatile(),
+  [CUSTOM_LIMIT_FIELD]: SettingsFields[CUSTOM_LIMIT_FIELD].volatile(),
+  [DANGER_PCT_FIELD]: SettingsFields[DANGER_PCT_FIELD].volatile(),
+})
+
+/** Untyped mirror of {@link Config}'s fields; see the field docs there. */
+export interface Config {
+  baseURL?: string
+  defaultContextWindow?: number
+  defaultMaxTokens?: number
+  streamIdleTimeoutMs?: number
   retryPolicy?: RetryPolicyConfig
+  showUsage?: boolean
+  customLimit?: number
+  dangerPct?: number
 }
 
 /**
- * Validate and complete the raw config.
- *
- * Programmatic construction can bypass any schema, so bounds are judged here
- * and a bad value fails at load with the field named, rather than mid-request.
- * @param config - the raw entry config.
- * @returns the resolved connection facts.
+ * Validate and complete the raw config. Programmatic construction can bypass
+ * any schema, so bounds are judged here and a bad value fails at load with the
+ * field named, rather than mid-request.
  */
 export function resolveConnectionOptions(config: Config = {}): CodeBuddyConnectionOptions {
   const positiveInteger = (value: number | undefined, field: string, fallback: number): number => {
@@ -158,32 +164,16 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   ctx.llm.registerAdapter([CODEBUDDY_PROVIDER], adapter)
 
-  // Durable preferences live in the Host user-settings document, so they
-  // survive a cleared browser profile and follow the account. The optional
-  // `settings` service keeps a provider-less deployment working; the browser
-  // scope then reports `unavailable` and the rows fall back to defaults.
-  ctx.inject(['settings'], (settingsCtx) => {
-    settingsCtx.settings.register(CODEBUDDY_SETTINGS_NAMESPACE, CodeBuddySettingsSchema)
-  })
-
-  // A catalog edit changes which models this route advertises. The harness
-  // catalog the Web client renders its provider groups from is cached
-  // client-side and only refetched on `llm/adapters-updated` (or the settings
-  // and credentials events), so without this republication a model the server
-  // added or deleted would keep its old row in the picker — showing a deleted
-  // model, and rendering an added one bare because the enrichment map, keyed
-  // by id, has no entry for it. The session reports content changes; this is
-  // the one place that turns them into the harness's own topology event.
+  // The Web client caches the catalog and refetches on
+  // `llm/adapters-updated`, so a server-side edit would keep stale rows in the
+  // picker without this republication.
   ctx.effect(() => session.onCatalogChange(() => {
     ctx.emit('llm/adapters-updated')
   }), 'dsh-llm-codebuddy: catalog change announcements')
 
   // Convergence for an open Web client that never reopens the menu: re-read
-  // the catalog on the same cadence as its own TTL and announce any change.
-  // The read is advisory (a failure logs and resolves empty) and emits nothing
-  // when the content is unchanged, so an idle harness costs one config read
-  // per interval and no client churn. `unref` keeps this maintenance timer from
-  // being the thing that holds the process alive on its own.
+  // the catalog on its own TTL cadence and announce any change. `unref` keeps
+  // the maintenance timer from holding the process alive.
   ctx.effect(() => {
     const timer = setInterval(() => {
       void session.refreshCatalog()
@@ -194,9 +184,8 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   new CodeBuddyAuthService(ctx, session, messageLocale)
 
-  // A signed-out mount is legitimate: the route registers, and the first
-  // request explains how to sign in. Saying so once at load keeps that from
-  // being a surprise at the first prompt.
+  // A signed-out mount is legitimate; saying so once at load keeps the first
+  // request's sign-in explanation from being a surprise.
   void session.isLoggedIn().then((loggedIn) => {
     if (loggedIn) return
     ctx.logger.info(

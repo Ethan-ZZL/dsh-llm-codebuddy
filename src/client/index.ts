@@ -29,7 +29,7 @@ import {
   Tooltip,
   Menu,
   Input,
-  IconChevronDownOutline14,
+  IconChevronDownOutlineMedium,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { CodeBuddyModelSelect, MODEL_SELECT_CSS } from './model-select.js'
 import type { ModelSelectT } from './model-select.js'
@@ -508,7 +508,7 @@ function UsagePrefRows({ t, prefs }: {
           'aria-expanded': menuOpen,
           onClick: () => { setMenuOpen((v) => !v) },
         }, showUsage ? t('on') : t('off'),
-          h(IconChevronDownOutline14),
+          h(IconChevronDownOutlineMedium),
         ),
       }),
     ),
@@ -664,7 +664,7 @@ export const inject = [
   'slots',
   'locale',
   'connection',
-  'settingsScope',
+  'configForms',
   'modelDirectories',
   'sessions',
   'remote',
@@ -708,13 +708,11 @@ export function apply(ctx: Context): void {
   const rpc = bindCodeBuddyRpc(ctx.connection.rpc)
   const t = ctx.locale.bind(NS)
 
-  // Durable preferences: one scope over this plugin's namespace. Without a
-  // settings provider the scope reports `unavailable` and the surface keeps
-  // the schema defaults, so the controls stay usable.
-  const prefs = createUsagePrefs(ctx.settingsScope.bind({
-    namespace: CODEBUDDY_SETTINGS_NAMESPACE,
-  }))
-  ctx.effect(() => () => { prefs.dispose() }, 'dsh-llm-codebuddy: settings scope subscription')
+  // Durable preferences: this plugin's own configuration form. When the
+  // settings transport reports the entry `unavailable` the surface keeps the
+  // schema defaults, so the controls stay usable.
+  const prefs = createUsagePrefs(ctx.configForms.get(CODEBUDDY_SETTINGS_NAMESPACE))
+  ctx.effect(() => () => { prefs.dispose() }, 'dsh-llm-codebuddy: settings form subscription')
 
   const injected = () => ({ rpc, prefs })
 
@@ -779,7 +777,7 @@ export function apply(ctx: Context): void {
           directory: directory.store,
           load: () => { directory.load().catch(() => {}) },
           select: (selection: { provider: string, model: string, reasoningEffort?: string }) =>
-            directory.select(selection).then(() => true, () => false),
+            directory.select(selection),
         }
       },
     }, (props: Omit<Parameters<typeof CodeBuddyModelSelect>[0], 'rpc' | 't'>) => CodeBuddyModelSelect({
