@@ -11,10 +11,19 @@
  */
 
 import type { Key, ReactElement } from 'react'
-import { createElement as h, Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { IconChevronDownOutlineMedium, IconChevronRightOutlineMedium, IconCheckOutlineMedium, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
+import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { createPortal } from 'react-dom'
+import {
+  IconCheckOutlineRegular,
+  IconChevronDownOutlineRegular,
+  IconChevronRightOutlineRegular,
+  IconDataOutlineRegular,
+  IconWarningOutlineRegular,
+  Toast,
+  Tooltip,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ModelSelectInjected } from '@deepseek-ai/dsh-client-ui-model-selection/client'
-import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
+import type { Translate, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { CODEBUDDY_PROVIDER } from '../constants.js'
 import type { CodeBuddyModelEntry } from '../protocol.js'
 
@@ -61,6 +70,33 @@ function parseTag(tag: string): DisplayTag | undefined {
  */
 function creditsOf(enriched: EnrichedModel | undefined): string | undefined {
   return enriched?.credits
+}
+
+/**
+ * Localize one `deepseek-official` row's description through the shared `model`
+ * dictionaries, whose naming rule is deterministic:
+ * `deepseek-v4-flash` ↔ `option.deepseekV4Flash.description`. The key is
+ * derived, never tabulated, so new official models localize with no change
+ * here; a translate miss returns the key itself, which keeps the catalog text.
+ */
+const BUILTIN_DESCRIPTION_PROVIDER = 'deepseek-official'
+
+/** kebab-case model id (`deepseek-v4-flash`) → camelCase segment (`deepseekV4Flash`). */
+const camelCase = (id: string): string =>
+  id.split('-').map((part, index) => index === 0 ? part : part.charAt(0).toUpperCase() + part.slice(1)).join('')
+
+function builtinDescriptionOf(
+  providerId: string,
+  model: { id: string, description?: string },
+  t: ModelSelectT,
+): string | undefined {
+  if (providerId !== BUILTIN_DESCRIPTION_PROVIDER || model.description === undefined) return model.description
+  // Derived keys sit outside the typed union by construction; the widened view
+  // is the same runtime function.
+  const wide = t as Translate<string>
+  const key = `option.${camelCase(model.id)}.description`
+  const localized = wide(key)
+  return localized !== key ? localized : model.description
 }
 
 /**
@@ -147,12 +183,17 @@ const richTooltip = ({ label, ...props }: RichTooltipProps, children: NativeTool
   h(Tooltip, { ...props, label: label as unknown as NativeTooltipProps['label'], children })
 
 /** Rich hover content for one model row. */
-function modelTooltipContent(model: { id: string, name: string, description?: string }, enriched: EnrichedModel | undefined): ReactElement {
+function modelTooltipContent(
+  providerId: string,
+  model: { id: string, name: string, description?: string },
+  enriched: EnrichedModel | undefined,
+  t: ModelSelectT,
+): ReactElement {
   const badges = (enriched?.tags ?? []).map(parseTag).filter((tag): tag is DisplayTag => tag !== undefined)
   const promotion = enriched?.promotion
-  // CodeBuddy's own description arrives in the displayed language already;
-  // every row, any provider, still gets the catalog description as a fallback.
-  const description = enriched?.description ?? model.description
+  // CodeBuddy's description arrives pre-localized; other providers fall back
+  // to the catalog text, with DeepSeek's built-in wording localized.
+  const description = enriched?.description ?? builtinDescriptionOf(providerId, model, t)
   const promotionText = promotion?.text
   return h('div', { className: 'cbms-tip' },
     h('div', { className: 'cbms-tipNameRow' },
@@ -194,15 +235,19 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
   const state = useSyncExternalStore(
     (fn) => directory.subscribe(fn),
     () => directory.getSnapshot(),
-    // Third argument = server snapshot, matching the official ModelSelect's
-    // own useSyncExternalStore call.
+    // Third argument = server snapshot, keeping hydration reads consistent
+    // with the client one (the directory snapshot is safe on the server).
     () => directory.getSnapshot(),
   )
   const [open, setOpen] = useState(false)
   const [pane, setPane] = useState<'root' | 'model' | 'effort'>('root')
   const lastActionRef = useRef<'load' | 'select'>('load')
+  const [toast, setToast] = useState<{ text: string } | null>(null)
+  const toastSeq = useRef(0)
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const [menuPos, setMenuPos] = useState<{ left: number, top: number } | null>(null)
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
   const id = useMemo(() => `cb-model-${Math.random().toString(36).slice(2, 8)}`, [])
   // Identity of the rows the shared directory currently advertises, including
@@ -242,11 +287,66 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
   useEffect(() => {
     if (!open) return
     const closeOutside = (event: MouseEvent): void => {
-      if (!(event.target instanceof Node) || !rootRef.current?.contains(event.target)) setOpen(false)
+      if (event.target instanceof Node && rootRef.current?.contains(event.target) === true) return
+      if (event.target instanceof Node && menuRef.current?.contains(event.target) === true) return
+      setOpen(false)
     }
     document.addEventListener('mousedown', closeOutside)
     return () => { document.removeEventListener('mousedown', closeOutside) }
   }, [open])
+
+  /** The first focusable row a keyboard entry should land on: the checked one, else the first enabled. */
+  const initialRow = (): HTMLElement | null | undefined =>
+    menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitemradio"][aria-checked="true"]:not([disabled])')
+      ?? itemRefs.current.find((item) => item !== null && !item.disabled)
+      ?? triggerRef.current
+
+  // Focus intent for the next pane render: "drill" focuses the pane's checked
+  // (or first enabled) row; "model"/"effort" return focus to that root cell.
+  const paneFocus = useRef<'drill' | 'model' | 'effort' | null>(null)
+  useEffect(() => {
+    const intent = paneFocus.current
+    paneFocus.current = null
+    if (!open || intent === null) return
+    if (intent === 'drill') {
+      initialRow()?.focus()
+      return
+    }
+    const cell = itemRefs.current[intent === 'effort' ? 1 : 0]
+    if (cell !== undefined && cell !== null && !cell.disabled) cell.focus()
+    else triggerRef.current?.focus()
+  }, [open, pane])
+
+  // The menu is portaled to the body, so it must be placed against the
+  // viewport by hand: anchored at the trigger's top-right, clamped inside the
+  // viewport with a margin, and re-placed on scroll or resize. While measuring
+  // (first frame), it stays hidden at the origin so offsetWidth/offsetHeight
+  // are real for the placement pass below.
+  useLayoutEffect(() => {
+    if (!open) {
+      setMenuPos(null)
+      return
+    }
+    const place = (): void => {
+      const rect = triggerRef.current?.getBoundingClientRect()
+      if (rect === undefined) return
+      const MARGIN = 12
+      const lw = menuRef.current?.offsetWidth ?? 0
+      const lh = menuRef.current?.offsetHeight ?? 0
+      let x = rect.right - lw
+      let y = rect.top - 8 - lh
+      if (lw > 0) x = Math.min(Math.max(x, MARGIN), window.innerWidth - lw - MARGIN)
+      if (lh > 0) y = Math.min(Math.max(y, MARGIN), window.innerHeight - lh - MARGIN)
+      setMenuPos({ left: x, top: y })
+    }
+    place()
+    window.addEventListener('scroll', place, true)
+    window.addEventListener('resize', place)
+    return () => {
+      window.removeEventListener('scroll', place, true)
+      window.removeEventListener('resize', place)
+    }
+  }, [open, pane, state])
 
   if (!available) return null
 
@@ -255,6 +355,7 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
     load()
   }
   const show = (): void => {
+    triggerRef.current?.focus()
     setPane('root')
     setOpen(true)
     reload()
@@ -264,40 +365,86 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
     setPane('root')
     if (restoreFocus) queueMicrotask(() => { triggerRef.current?.focus() })
   }
+  /** Enter a drilled pane, focusing its checked (or first enabled) row. */
+  const drill = (next: 'model' | 'effort'): void => {
+    paneFocus.current = 'drill'
+    setPane(next)
+  }
+  /** Leave a drilled pane for the root one, handing the keyboard back to its cell. */
+  const back = (from: 'model' | 'effort'): void => {
+    paneFocus.current = from
+    setPane('root')
+  }
   const moveFocus = (offset: number): void => {
     const items = itemRefs.current.filter((item): item is HTMLButtonElement => item !== null)
     if (items.length === 0) return
     const active = items.findIndex((item) => item === document.activeElement)
-    items[(Math.max(active, 0) + offset + items.length) % items.length]?.focus()
+    items[active === -1 ? offset > 0 ? 0 : items.length - 1 : (active + offset + items.length) % items.length]?.focus()
   }
   const onRootKeyDown = (event: React.KeyboardEvent): void => {
     if (event.key === 'Escape' && open) {
       event.preventDefault()
-      if (pane !== 'root') setPane('root')
+      if (pane !== 'root') back(pane)
       else close(true)
       return
     }
     if (!open) return
+    if (event.key === 'Tab') {
+      if (event.shiftKey) {
+        event.preventDefault()
+        if (pane !== 'root') back(pane)
+        else close(true)
+        return
+      }
+      const focused = document.activeElement
+      const rows = itemRefs.current.filter((item): item is HTMLButtonElement => item !== null)
+      if (focused instanceof HTMLButtonElement && rows.includes(focused)) {
+        // Tab on a row settles like Enter.
+        event.preventDefault()
+        focused.click()
+        return
+      }
+      if (focused !== triggerRef.current) return
+      event.preventDefault()
+      initialRow()?.focus()
+      return
+    }
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault()
       moveFocus(event.key === 'ArrowDown' ? 1 : -1)
     }
   }
   const onBlur = (event: React.FocusEvent): void => {
-    if (event.relatedTarget instanceof Node && rootRef.current?.contains(event.relatedTarget)) return
+    if (event.relatedTarget instanceof Node
+      && (rootRef.current?.contains(event.relatedTarget) === true || menuRef.current?.contains(event.relatedTarget) === true)) return
     close()
+  }
+  type SelectOutcome = Awaited<ReturnType<ModelSelectInjected['select']>>
+  const settleSelection = (result: SelectOutcome): void => {
+    if (result === undefined) return
+    if (result.ok) {
+      if (rootRef.current !== null) close(true)
+      return
+    }
+    const { error } = result
+    toastSeq.current += 1
+    setToast({
+      text: error.code === 'session/writer-held'
+        ? t('error.sessionInUse')
+        : t('error.action', { message: `${error.code}: ${error.message}` }),
+    })
+  }
+  const submit = (selection: { provider: string, model: string, reasoningEffort?: string }): void => {
+    lastActionRef.current = 'select'
+    triggerRef.current?.focus()
+    void select(selection).then(settleSelection)
   }
   const choose = (selection: { provider: string, model: string, reasoningEffort?: string }): void => {
     if (state.current?.provider === selection.provider && state.current.model === selection.model) {
       close(true)
       return
     }
-    lastActionRef.current = 'select'
-    void select(selection).then((accepted) => {
-      if (accepted) {
-        if (rootRef.current !== null) close(true)
-      }
-    })
+    submit(selection)
   }
   const chooseEffort = (effort: string | undefined): void => {
     if (state.current === null) return
@@ -305,13 +452,10 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
       close(true)
       return
     }
-    lastActionRef.current = 'select'
-    void select({
+    submit({
       provider: state.current.provider,
       model: state.current.model,
       ...effort === undefined ? {} : { reasoningEffort: effort },
-    }).then((accepted) => {
-      if (accepted) close(true)
     })
   }
 
@@ -337,6 +481,11 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
     className: 'cbms-root',
     onKeyDown: onRootKeyDown,
     onBlur,
+    // A row press must not blur the trigger before its click lands: the menu
+    // is portaled, so without this the root's blur handler would close it.
+    onMouseDown: (event: React.MouseEvent) => {
+      if (event.target instanceof Element && event.target.closest('button') !== null) event.preventDefault()
+    },
   },
     h('button', {
       ref: triggerRef,
@@ -345,17 +494,26 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
       'aria-label': triggerAria,
       'aria-haspopup': 'menu',
       'aria-expanded': open,
+      'aria-controls': open ? `${id}-menu` : undefined,
       title: `${modelLabel}${effortLabel === undefined ? '' : ` · ${effortLabel}`}`,
       disabled: locked,
-      onClick: () => { if (open) close(); else show() },
+      onClick: () => { if (open) close(true); else show() },
     },
+      // The icon slot and the label/effort pair respond to the composer's
+      // compact-mode CSS variables, so the seat folds to icon-only with the
+      // rest of the composer controls.
+      h(IconDataOutlineRegular, { className: 'cbms-triggerIcon', size: 16 }),
       h('span', { className: 'cbms-triggerLabel' }, modelLabel),
       effortLabel !== undefined ? h('span', { className: 'cbms-triggerEffort' }, effortLabel) : null,
-      h(IconChevronDownOutlineMedium, { className: `cbms-chevron${open ? ' cbms-chevronOpen' : ''}` }),
+      h(IconChevronDownOutlineRegular, { className: `cbms-chevron${open ? ' cbms-chevronOpen' : ''}` }),
     ),
-    open ? h('div', {
+    open ? createPortal(h('div', {
+      ref: menuRef,
       id: `${id}-menu`,
       className: 'cbms-menu',
+      // Before the placement pass lands, stay hidden at the origin so the
+      // menu can be measured (offsetWidth/offsetHeight) without a flash.
+      style: menuPos ?? { visibility: 'hidden', left: 0, top: 0 },
       role: 'menu',
       'aria-label': t('menu.aria'),
       'aria-busy': state.status === 'loading' || busy,
@@ -363,19 +521,19 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
       pane === 'root' ? h(Fragment, null,
         h('button', {
           ref: itemRef(), type: 'button', role: 'menuitem', className: 'cbms-cell',
-          onClick: () => { setPane('model') },
+          onClick: () => { drill('model') },
         },
           h('span', { className: 'cbms-cellLabel' }, t('menu.model')),
           h('span', { className: 'cbms-cellValue' }, modelLabel),
-          h(IconChevronRightOutlineMedium, { className: 'cbms-cellChevron' }),
+          h(IconChevronRightOutlineRegular, { className: 'cbms-cellChevron' }),
         ),
         reasoning !== undefined ? h('button', {
           ref: itemRef(), type: 'button', role: 'menuitem', className: 'cbms-cell',
-          onClick: () => { setPane('effort') },
+          onClick: () => { drill('effort') },
         },
           h('span', { className: 'cbms-cellLabel' }, t('menu.effort')),
           h('span', { className: 'cbms-cellValue' }, effortLabel),
-          h(IconChevronRightOutlineMedium, { className: 'cbms-cellChevron' }),
+          h(IconChevronRightOutlineRegular, { className: 'cbms-cellChevron' }),
         ) : null,
       ) : null,
       pane === 'model' ? h(Fragment, null,
@@ -405,8 +563,9 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
               const promotion = extra?.promotion
               return richTooltip({
                 key: model.id,
-                label: modelTooltipContent(model, extra),
+                label: modelTooltipContent(group.id, model, extra, t),
                 side: 'top',
+                portal: true,
                 delayMs: 300,
               }, h('button', {
                 ref: itemRef(),
@@ -431,7 +590,7 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
                 ),
                 // The selection check comes before the rate, so an
                 // unselected row's multiplier sits flush right.
-                h('span', { className: 'cbms-check' }, selected ? h(IconCheckOutlineMedium, null) : null),
+                h('span', { className: 'cbms-check' }, selected ? h(IconCheckOutlineRegular, null) : null),
                 rate !== undefined ? h('span', {
                   className: `cbms-credits${rate.promo ? ' cbms-creditsPromo' : rate.free ? ' cbms-creditsFree' : ''}`,
                   ...rate.tint === undefined ? {} : { style: { color: rate.tint } },
@@ -462,11 +621,19 @@ export function CodeBuddyModelSelect({ locked, available, directory, load, selec
             h('span', { className: 'cbms-optionCopy' },
               h('span', { className: 'cbms-modelName' }, level.label),
             ),
-            h('span', { className: 'cbms-check' }, selected ? h(IconCheckOutlineMedium, null) : null),
+            h('span', { className: 'cbms-check' }, selected ? h(IconCheckOutlineRegular, null) : null),
           )
         }),
       ) : null,
-    ) : null,
+    ), document.body) : null,
+    toast !== null ? h(Toast, {
+      key: toastSeq.current,
+      text: toast.text,
+      icon: h(IconWarningOutlineRegular, null),
+      // Anchored to the composer card, as the official seat's toasts are.
+      anchor: rootRef.current?.closest<HTMLElement>('[data-composer-card]') ?? null,
+      onDone: () => { setToast(null) },
+    }) : null,
   )
 }
 
@@ -478,33 +645,36 @@ export const MODEL_SELECT_CSS = `
 .cbms-trigger:focus-visible{box-shadow:0 0 0 2px var(--dsw-alias-border-l3)}
 .cbms-trigger:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}
 .cbms-triggerLabel{text-overflow:ellipsis;white-space:nowrap;min-width:0;overflow:hidden}
-.cbms-triggerEffort{color:var(--dsw-alias-label-caption);flex:none}
+.cbms-triggerEffort{text-overflow:ellipsis;white-space:nowrap;min-width:0;color:var(--dsw-alias-label-caption);flex-shrink:1000;overflow:hidden}
+.cbms-triggerIcon{display:var(--dsh-composer-model-icon-display,none);flex:none}
+.cbms-triggerLabel,.cbms-triggerEffort{display:var(--dsh-composer-model-text-display,block)}
 .cbms-chevron{color:var(--dsw-alias-label-caption);flex:none;transition:transform .12s}
 .cbms-chevronOpen{transform:rotate(180deg)}
-.cbms-menu{z-index:20;background:var(--dsw-specific-menu);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);width:max-content;min-width:min(300px,100vw - 32px);max-width:min(460px,100vw - 32px);max-height:min(400px,100vh - 96px);box-shadow:var(--dsw-elevation-prominent);color:var(--dsw-alias-label-primary);--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2);border:0;border-radius:20px;flex-direction:column;padding:4px;display:flex;position:absolute;bottom:calc(100% + 8px);right:0;overflow:hidden}
-.cbms-status,.cbms-empty{color:var(--dsw-alias-label-tertiary);padding:10px;font-size:13px;line-height:20px}
-.cbms-error,.cbms-warning{background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary);border-radius:8px;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:4px;padding:7px 8px;font-size:12px;line-height:18px;display:flex}
+.cbms-menu{z-index:1100;background:var(--dsw-specific-menu);-webkit-backdrop-filter:var(--dsw-menu-backdrop-filter);backdrop-filter:var(--dsw-menu-backdrop-filter);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);width:max-content;min-width:min(300px,100vw - 32px);max-width:min(460px,100vw - 32px);max-height:min(360px,100vh - 96px);box-shadow:var(--dsw-elevation-prominent);color:var(--dsw-alias-label-primary);--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2);border:0;border-radius:16px;flex-direction:column;padding:3px;display:flex;position:fixed;overflow:hidden}
+.cbms-status,.cbms-empty{color:var(--dsw-alias-label-tertiary);padding:8px;font-size:12px;line-height:18px}
+.cbms-error,.cbms-warning{background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary);border-radius:7px;justify-content:space-between;align-items:flex-start;gap:6px;margin-bottom:3px;padding:6px 7px;font-size:11px;line-height:16px;display:flex}
 .cbms-warning{background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-state-warn-label)}
 .cbms-retry{color:inherit;font:inherit;cursor:pointer;background:0 0;border:none;flex:none;padding:0;font-weight:600}
 .cbms-groups{min-height:0;overflow-y:auto}
-.cbms-group+.cbms-group{margin-top:4px}
-.cbms-groupTitle{z-index:1;background:var(--dsw-specific-menu);color:var(--dsw-alias-label-tertiary);padding:5px 8px 3px;font-size:12px;font-weight:500;line-height:18px;position:sticky;top:0}
-.cbms-option{box-sizing:border-box;width:auto;min-width:100%;min-height:38px;color:inherit;text-align:left;cursor:pointer;background:0 0;border:none;border-radius:10px;outline:none;align-items:center;gap:8px;padding:6px 8px;display:flex}
+.cbms-group+.cbms-group{margin-top:3px}
+.cbms-groupTitle{z-index:1;background:var(--dsw-specific-menu);color:var(--dsw-alias-label-tertiary);padding:4px 7px 2px;font-size:11px;font-weight:500;line-height:16px;position:sticky;top:0}
+.cbms-option{box-sizing:border-box;width:auto;min-width:100%;min-height:34px;color:inherit;text-align:left;cursor:pointer;background:0 0;border:none;border-radius:8px;outline:none;align-items:center;gap:6px;padding:5px 7px;display:flex}
 .cbms-option:hover:not(:disabled),.cbms-option:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}
 .cbms-selected{background:0 0}
 .cbms-option:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}
 .cbms-optionCopy{align-items:center;gap:6px;min-width:0;flex:1;display:flex}
-.cbms-modelName{color:inherit;text-overflow:ellipsis;white-space:nowrap;font-size:14px;font-weight:500;line-height:20px;overflow:hidden}
+.cbms-modelName{color:inherit;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:500;line-height:18px;overflow:hidden}
 .cbms-tag{flex:none;border:0.5px solid;border-radius:4px;padding:0 5px;font-size:11px;line-height:16px;font-weight:400}
 .cbms-credits{color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;white-space:nowrap;flex:none;font-size:12px;line-height:18px;font-weight:400}
 .cbms-creditsFree{color:var(--dsw-alias-state-success-primary)}
 .cbms-creditsPromo{color:var(--dsw-alias-state-business-primary)}
-.cbms-check{color:var(--dsw-alias-label-primary);flex:0 0 18px;place-items:center;display:grid}
-.cbms-cell{box-sizing:border-box;width:auto;min-width:100%;height:40px;color:var(--dsw-alias-label-primary);cursor:pointer;text-align:left;background:0 0;border:none;border-radius:10px;align-items:center;gap:8px;padding:0 10px;font-size:14px;line-height:22px;display:flex}
+.cbms-check{color:var(--dsw-alias-label-primary);flex:0 0 14px;place-items:center;display:grid}
+.cbms-check svg{width:14px;height:14px}
+.cbms-cell{box-sizing:border-box;width:auto;min-width:100%;height:34px;color:var(--dsw-alias-label-primary);cursor:pointer;text-align:left;background:0 0;border:none;border-radius:8px;align-items:center;gap:6px;padding:0 8px;font-size:13px;line-height:20px;display:flex}
 .cbms-cell:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .cbms-cellLabel{white-space:nowrap;flex:none}
 .cbms-cellValue{text-overflow:ellipsis;white-space:nowrap;text-align:right;min-width:0;color:var(--dsw-alias-label-tertiary);flex:auto;overflow:hidden}
-.cbms-cellChevron{color:var(--dsw-alias-label-tertiary);flex:none}
+.cbms-cellChevron{width:12px;height:12px;color:var(--dsw-alias-label-tertiary);flex:none}
 .cbms-tip{color:inherit;max-width:480px;flex-direction:column;gap:4px;display:flex}
 .cbms-tipNameRow{align-items:baseline;gap:8px;min-width:0;display:flex;white-space:nowrap;overflow:hidden}
 .cbms-tipName{font-weight:500;text-overflow:ellipsis;flex:0 1 auto;overflow:hidden}
