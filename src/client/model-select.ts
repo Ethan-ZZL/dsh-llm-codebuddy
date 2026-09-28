@@ -101,31 +101,18 @@ function builtinDescriptionOf(
 
 /**
  * The rate label a row shows at its trailing edge. An active promotion's
- * override replaces the catalog rate; it is tinted with the promotion's badge
- * color only when it differs numerically.
+ * override replaces the catalog rate and always uses the promotion badge color.
  */
 function rowRate(credits: string | undefined, promotion: EnrichedModel['promotion']): { label: string, promo: boolean, free: boolean, tint?: string } | undefined {
   const promoLabel = promotion?.discountedRate
   const label = promoLabel ?? credits
   if (label === undefined) return undefined
-  const promoRate = promoLabel !== undefined ? parseRate(promoLabel) : undefined
-  const catalogRate = credits !== undefined ? parseRate(credits) : undefined
-  const differs = promoRate !== undefined && (catalogRate === undefined || promoRate !== catalogRate)
   return {
     label,
     promo: promoLabel !== undefined,
     free: isFreeCredits(label),
-    ...differs && promotion !== undefined && promotion.color !== undefined ? { tint: promotion.color } : {},
+    ...promoLabel !== undefined && promotion?.color !== undefined ? { tint: promotion.color } : {},
   }
-}
-
-/** Numeric value of a rate label ("x0.50" → 0.5), or undefined. */
-function parseRate(label: string): number | undefined {
-  const match = /(\d+(?:\.\d+)?)/.exec(label)
-  const digits = match?.[1]
-  if (digits === undefined) return undefined
-  const value = Number.parseFloat(digits)
-  return Number.isFinite(value) ? value : undefined
 }
 
 /**
